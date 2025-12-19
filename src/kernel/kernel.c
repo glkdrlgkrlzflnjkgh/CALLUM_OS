@@ -200,7 +200,6 @@ __attribute__((noreturn)) void panic(const char* msg) {
         vga_putdec_at(row,col,i,BSOD_ATTR);
         col+=2; // skip past digits
         VGA[row*VGA_COLS+col++]=vga_cell(']',BSOD_ATTR);
-        VGA[row*VGA_COLS+col++]=vga_cell(' ',BSOD_ATTR);
         vga_puthex32_at(row,col,esp[i],BSOD_ATTR);
     }
 
