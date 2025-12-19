@@ -1,0 +1,15 @@
+
+build/kernel.elf:     file format elf32-i386
+
+
+Disassembly of section .text:
+
+00101510 <irq_timer+0x23>:
+  101510:	a1 07 1f cf 90       	mov    eax,ds:0x90cf1f07
+  101515:	0f 0b                	ud2
+
+00101517 <irq_keyboard_stub>:
+  101517:	e8 d3 0b 00 00       	call   1020ef <__x86.get_pc_thunk.ax>
+  10151c:	05                   	.byte 0x5
+  10151d:	a8 18                	test   al,0x18
+	...
