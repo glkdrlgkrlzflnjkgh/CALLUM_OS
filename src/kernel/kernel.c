@@ -24,16 +24,21 @@ const struct { uint32_t magic, flags, checksum; } multiboot_header = {
 };
 
 /* ---------- KMALLOC constants  ---------- */
-
+typedef struct free_block {
+    size_t size;               // total size of this block, including header
+    struct free_block* next;   // next block in free list
+} free_block_t;
 extern char _end;
 uintptr_t heap_ptr = (uintptr_t)&_end;
 
 #define HEAP_SIZE 0x100000   // 1 MiB heap for now
 uintptr_t heap_end = (uintptr_t)&_end + HEAP_SIZE;
-
+static free_block_t* free_list = NULL;
 #define MARKER_STACK_SIZE 1024
 uintptr_t marker_stack[MARKER_STACK_SIZE];
 int marker_top = 0;
+
+#define MIN_SPLIT_SIZE (sizeof(free_block_t) + 8)
 /* ---------- ISR/IRQ externs (irq.S) ---------- */
 extern void irq_timer(void);
 extern void irq_keyboard_stub(void);
@@ -64,30 +69,91 @@ static inline uint8_t inb(uint16_t port){
     return v;
 }
 static inline void io_wait(void){ outb(0x80,0); }
-
 void* kmalloc(size_t size) {
+    if (size == 0) {
+        return NULL;
+    }
+
     // Align to 8 bytes
-    heap_ptr = (heap_ptr + 7) & ~7;
+    size = (size + 7) & ~((size_t)7);
 
-    if (marker_top >= MARKER_STACK_SIZE)
-        return NULL; // too many nested allocations (the marker stack will overflow if we allocate any more!)
+    size_t total_size = size + sizeof(free_block_t);
 
-    if (heap_ptr + size > heap_end)
-        return NULL; // out of memory (if we didn't have this, its heap corruption time!)
+    // 1. Try free list first
+    free_block_t** prev = &free_list;
+    free_block_t* curr = free_list;
 
-    marker_stack[marker_top++] = heap_ptr;
+    while (curr) {
+        if (curr->size >= total_size) {
 
-    void* addr = (void*)heap_ptr;
-    heap_ptr += size;
+            size_t leftover = curr->size - total_size;
 
-    return addr;
+            if (leftover >= MIN_SPLIT_SIZE) {
+                // --- SPLIT THE BLOCK ---
+                free_block_t* new_block =
+                    (free_block_t*)((uint8_t*)curr + total_size);
+
+                new_block->size = leftover;
+                new_block->next = curr->next;
+
+                // Replace curr in free list with leftover block
+                *prev = new_block;
+
+                // Shrink curr to the requested size
+                curr->size = total_size;
+
+            } else {
+                // --- USE WHOLE BLOCK ---
+                *prev = curr->next;
+            }
+
+            // Push marker for this allocation
+            if (marker_top < MARKER_STACK_SIZE) {
+                marker_stack[marker_top++] = (uintptr_t)curr;
+            }
+
+            return (void*)((uint8_t*)curr + sizeof(free_block_t));
+        }
+
+        prev = &curr->next;
+        curr = curr->next;
+    }
+
+    // 2. Fall back to bump allocation
+    if (heap_ptr + total_size > heap_end) {
+        return NULL; // Out of memory
+    }
+
+    free_block_t* block = (free_block_t*)heap_ptr;
+    block->size = total_size;
+    block->next = NULL;
+
+    if (marker_top < MARKER_STACK_SIZE) {
+        marker_stack[marker_top++] = (uintptr_t)block;
+    }
+
+    heap_ptr += total_size;
+
+    return (void*)((uint8_t*)block + sizeof(free_block_t));
 }
 
-void kfree() {
-    if (marker_top == 0)
-        return; // nothing to free
+void kfree(void* ptr) {
+    if (!ptr) {
+        return;
+    }
 
-    heap_ptr = marker_stack[--marker_top];
+    // Move back from user pointer to the block header
+    free_block_t* block = (free_block_t*)((uint8_t*)ptr - sizeof(free_block_t));
+
+    // Insert this block at the front of the free list
+    block->next = free_list;
+    free_list = block;
+
+    // Optional: pop marker stack if you want LIFO semantics too
+    // (Only do this if you want kfree() to also act like a "rewind")
+    if (marker_top > 0 && marker_stack[marker_top - 1] == (uintptr_t)block) {
+        marker_top--;
+    }
 }
 /* ---------- VGA ---------- */
 static volatile uint16_t* const VGA = (uint16_t*)0xB8000;
@@ -624,7 +690,7 @@ void Test_Kmalloc() {
    if (!kmalloc_test) {
        panic("Kmalloc test failed!");
    }
-   kfree();
+   kfree(kmalloc_test);
 }
 /* ---------- Kernel entry ---------- */
 __attribute__((noreturn)) void kernel_main(void){
