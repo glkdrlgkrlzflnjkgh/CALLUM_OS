@@ -29,4 +29,6 @@ cp "$BUILD_DIR/kernel.elf" "$ISO_DIR/boot/"
 echo "[5] Building bootable ISO..."
 grub-mkrescue -o CallumOS.iso "$ISO_DIR"
 
-echo "✅ Build complete: CallumOS.iso"
+echo "[6] Creating bootable virtual disk..."
+dd if=CallumOS.iso of=disk.img bs=4M status=progress
+echo "✅ Build complete: disk.img"
