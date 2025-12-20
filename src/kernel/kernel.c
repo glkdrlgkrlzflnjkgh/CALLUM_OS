@@ -699,7 +699,10 @@ __attribute__((noreturn)) void kernel_main(void){
     uint8_t m=inb(0x21); m &= ~(0x03); outb(0x21,m);
     outb(0xA1,0xFF);
     keyboard_enable();
-
+    vga_write("TESTING KMALLOC...",0x0F);
+    kmalloc(8);
+    vga_write("TESTING KFREE...",0x0F);
+    kfree();
 
     vga_write("CallumOS kernel V0.1 is loading... \n",0x0F);
     vga_write("TR=",0x0A); print_hex16(tr_probe,0x0A);

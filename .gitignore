@@ -3,3 +3,4 @@
 *.iso
 *.img
 *.elf
+src/kernel/.kernel.c.swp
