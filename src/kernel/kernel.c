@@ -1,3 +1,12 @@
+/* ---------- TODOS  ---------- */
+// ✓ add Kmalloc
+// ✓ add Kfree
+// Filesystem
+// ELF loader
+// A video driver?
+
+
+
 /* src/kernel/kernel.c — CallumOS full kernel (i386, Multiboot, VGA TTY, IRQs, syscalls, userland) */
 #include <stdint.h>
 #include <stddef.h>
@@ -14,6 +23,17 @@ const struct { uint32_t magic, flags, checksum; } multiboot_header = {
 // because GRUB wont think our kernel is valid unless we add this!
 };
 
+/* ---------- KMALLOC constants  ---------- */
+
+extern char _end;
+uintptr_t heap_ptr = (uintptr_t)&_end;
+
+#define HEAP_SIZE 0x100000   // 1 MiB heap for now
+uintptr_t heap_end = (uintptr_t)&_end + HEAP_SIZE;
+
+#define MARKER_STACK_SIZE 1024
+uintptr_t marker_stack[MARKER_STACK_SIZE];
+int marker_top = 0;
 /* ---------- ISR/IRQ externs (irq.S) ---------- */
 extern void irq_timer(void);
 extern void irq_keyboard_stub(void);
@@ -45,6 +65,30 @@ static inline uint8_t inb(uint16_t port){
 }
 static inline void io_wait(void){ outb(0x80,0); }
 
+void* kmalloc(size_t size) {
+    // Align to 8 bytes
+    heap_ptr = (heap_ptr + 7) & ~7;
+
+    if (marker_top >= MARKER_STACK_SIZE)
+        return NULL; // too many nested allocations (the marker stack will overflow if we allocate any more!)
+
+    if (heap_ptr + size > heap_end)
+        return NULL; // out of memory (if we didn't have this, its heap corruption time!)
+
+    marker_stack[marker_top++] = heap_ptr;
+
+    void* addr = (void*)heap_ptr;
+    heap_ptr += size;
+
+    return addr;
+}
+
+void kfree() {
+    if (marker_top == 0)
+        return; // nothing to free
+
+    heap_ptr = marker_stack[--marker_top];
+}
 /* ---------- VGA ---------- */
 static volatile uint16_t* const VGA = (uint16_t*)0xB8000;
 static int cursor_row=0, cursor_col=0;
