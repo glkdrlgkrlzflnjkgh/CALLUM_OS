@@ -236,8 +236,8 @@ __attribute__((noreturn)) void panic(const char* msg) {
     uint32_t* esp;
     __asm__ __volatile__("mov %%esp,%0":"=r"(esp));
 
-    /* Print 10 entries: [index] 0xXXXXXXXX */
-    for (int i=0;i<10;i++) {
+
+    for (int i=0;i<13;i++) {
         int row=12+i;
         int col=4;
         VGA[row*VGA_COLS+col++]=vga_cell('[',BSOD_ATTR);
@@ -401,7 +401,8 @@ void irq_timer_c(void){
 }
 
 /* ---------- Syscalls ---------- */
-enum { SYS_write=1, SYS_readch=2, SYS_exit=3, SYS_yield=4 };
+enum { SYS_write=1, SYS_readch=2, SYS_exit=3, SYS_yield=4, SYS_alloc=5 }; // SYS_alloc is...
+// <contd> unsed for now!
 
 /* Single, consistent signature returning uint32_t (assembly stub writes back to saved EAX) */
 uint32_t isr_syscall_c(uint32_t num, uint32_t arg){
@@ -617,7 +618,14 @@ __attribute__((naked)) static void user_entry(void){
     __asm__ __volatile__(".intel_syntax noprefix\n\tmov ax,0x23\n\tmov ds,ax\n\tmov es,ax\n\tmov fs,ax\n\tmov gs,ax\n\tsti\n\tcall user_shell\n\t.att_syntax prefix\n\t"); // BOOOOOIINNNGG!!
     panic("user_entry returned unexpectedly");
 }
-
+void Test_Kmalloc() {
+   vga_write("Testing Kmalloc...\n",0x0F);
+   void* kmalloc_test = kmalloc(8);
+   if (!kmalloc_test) {
+       panic("Kmalloc test failed!");
+   }
+   kfree();
+}
 /* ---------- Kernel entry ---------- */
 __attribute__((noreturn)) void kernel_main(void){
     /* GDT: null, KCS, KDS, UCS, UDS, TSS */
@@ -699,11 +707,7 @@ __attribute__((noreturn)) void kernel_main(void){
     uint8_t m=inb(0x21); m &= ~(0x03); outb(0x21,m);
     outb(0xA1,0xFF);
     keyboard_enable();
-    vga_write("TESTING KMALLOC...",0x0F);
-    kmalloc(8);
-    vga_write("TESTING KFREE...",0x0F);
-    kfree();
-
+    Test_Kmalloc();
     vga_write("CallumOS kernel V0.1 is loading... \n",0x0F);
     vga_write("TR=",0x0A); print_hex16(tr_probe,0x0A);
     vga_write(" TSS.ss0=",0x0A); print_hex16(tss.ss0,0x0A);
