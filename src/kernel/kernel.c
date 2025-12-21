@@ -4,7 +4,7 @@
 // Filesystem
 // ELF loader
 // A video driver?
-
+// fact: i embarassed myself by trying to fix a "bug" with userland where it wouldnt priv switch to ring 3, the bug was actually a misreport from the probe command!
 
 
 /* src/kernel/kernel.c — CallumOS full kernel (i386, Multiboot, VGA TTY, IRQs, syscalls, userland) */
@@ -136,25 +136,62 @@ void* kmalloc(size_t size) {
 
     return (void*)((uint8_t*)block + sizeof(free_block_t));
 }
-
-void kfree(void* ptr) {
-    if (!ptr) {
+static void insert_block_sorted(free_block_t* block) {
+    // If the free list is empty, or this block belongs at the head
+    if (!free_list || block < free_list) {
+        block->next = free_list;
+        free_list = block;
         return;
     }
 
-    // Move back from user pointer to the block header
-    free_block_t* block = (free_block_t*)((uint8_t*)ptr - sizeof(free_block_t));
+    free_block_t* curr = free_list;
 
-    // Insert this block at the front of the free list
-    block->next = free_list;
-    free_list = block;
+    // Walk until we find the insertion point
+    while (curr->next && curr->next < block) {
+        curr = curr->next;
+    }
 
-    // Optional: pop marker stack if you want LIFO semantics too
-    // (Only do this if you want kfree() to also act like a "rewind")
-    if (marker_top > 0 && marker_stack[marker_top - 1] == (uintptr_t)block) {
-        marker_top--;
+    // Insert block between curr and curr->next
+    block->next = curr->next;
+    curr->next = block;
+}
+static void coalesce() {
+    free_block_t* curr = free_list;
+
+    while (curr && curr->next) {
+        // Compute the end address of the current block
+        uintptr_t curr_end = (uintptr_t)curr + curr->size;
+
+        // If the next block starts exactly where this one ends, merge them
+        if (curr_end == (uintptr_t)curr->next) {
+            // Merge: grow curr to include next
+            curr->size += curr->next->size;
+
+            // Remove next from the list
+            curr->next = curr->next->next;
+
+            // DO NOT advance curr — the new merged block
+            // might also touch the next one
+        } else {
+            // No merge possible, move forward
+            curr = curr->next;
+        }
     }
 }
+void kfree(void* ptr) {
+    if (!ptr)
+        return;
+
+    // Move pointer back to the block header
+    free_block_t* block = (free_block_t*)ptr - 1;
+
+    // Insert into the free list in address order
+    insert_block_sorted(block);
+
+    // Merge adjacent free blocks
+    coalesce();
+}
+
 /* ---------- VGA ---------- */
 static volatile uint16_t* const VGA = (uint16_t*)0xB8000;
 static int cursor_row=0, cursor_col=0;
@@ -280,7 +317,7 @@ __attribute__((noreturn)) void panic(const char* msg) {
             VGA[r*VGA_COLS+c]=vga_cell(' ',BSOD_ATTR);
 
     /* Banner */
-    const char* banner="===== CALLUMOS KERNEL PANIC =====";
+    const char* banner="<--[CALLUMOS KERNEL PANIC]-->";
     int banner_col=(VGA_COLS-str_len(banner))/2;
     vga_puts_at(4,banner_col,banner,BSOD_ATTR);
 
