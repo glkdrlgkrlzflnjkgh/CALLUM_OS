@@ -4,7 +4,8 @@
 // Filesystem
 // ELF loader
 // A video driver?
-// fact: i embarassed myself by trying to fix a "bug" with userland where it wouldnt priv switch to ring 3, the bug was actually a misreport from the probe command!
+// fact: i embarassed myself by trying to fix a "bug" with userland where it wouldnt priv switch to ring 3, the bug was actually a misreport from the probe command! -Callum, project lead..
+// <CONTD> and head maintainer!
 
 
 /* src/kernel/kernel.c — CallumOS full kernel (i386, Multiboot, VGA TTY, IRQs, syscalls, userland) */
