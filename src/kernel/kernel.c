@@ -291,7 +291,7 @@ static void vga_puts_at(int row, int col, const char* s, uint8_t attr) {
     }
 }
 
-static void vga_putdec_at(int row, int col, int n, uint8_t attr) {
+ static void vga_putdec_at(int row, int col, int n, uint8_t attr) {
     char buf[12]; int i=0;
     if (n==0) { VGA[row*VGA_COLS+col]=vga_cell('0',attr); return; }
     while (n>0) { buf[i++]='0'+(n%10); n/=10; }
@@ -372,7 +372,7 @@ struct __attribute__((packed)) idt_ptr{ uint16_t limit; uint32_t base; };
 
 /* Correct i386 TSS layout */
 struct __attribute__((packed)) tss_entry {
-    uint16_t prev_tss, __prev_pad;
+     uint16_t prev_tss, __prev_pad;
     uint32_t esp0;
     uint16_t ss0, __ss0_pad;
     uint32_t esp1;
