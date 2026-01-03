@@ -505,7 +505,7 @@ void irq_timer_c(void){
 }
 
 /* ---------- Syscalls ---------- */
-enum { SYS_write=1, SYS_readch=2, SYS_exit=3, SYS_yield=4, SYS_alloc=5 }; // SYS_alloc is...
+enum { SYS_write=1, SYS_readch=2, SYS_exit=3, SYS_yield=4, SYS_alloc=5, SYS_reboot=6 }; // SYS_alloc is...
 // <contd> unsed for now!
 
 /* Single, consistent signature returning uint32_t (assembly stub writes back to saved EAX) */
@@ -522,6 +522,8 @@ uint32_t isr_syscall_c(uint32_t num, uint32_t arg){
         case SYS_yield:
             /* cooperative placeholder */
             return 0;
+	case SYS_reboot:
+	     return 0;
         default:
             /* Don’t panic — signal ENOSYS to userland */
             return 0xFFFFFFFFU;
@@ -664,7 +666,6 @@ static void user_shell(void){
             }
         }
         if(len==0) continue;
-
         if(len>=5 && line[0]=='p'&&line[1]=='r'&&line[2]=='o'&&line[3]=='b'&&line[4]=='e'){
             show_isr_stack_probe();
         } else if(len>=6 && line[0]=='s'&&line[1]=='t'&&line[2]=='a'&&line[3]=='c'&&line[4]=='k'&&line[5]=='s'){
@@ -685,7 +686,7 @@ static void user_shell(void){
             u_write(s); u_write("\n");
         } else if(len==4 && line[0]=='e'&&line[1]=='x'&&line[2]=='i'&&line[3]=='t'){
             u_write("Bye.\n");
-            u_exit();
+            outb(0xCF9, 0x06); // full reset, lets just hope that ring 3 can call it.
         } else if(len==5 && line[0]=='c'&&line[1]=='r'&&line[2]=='a'&&line[3]=='s'&&line[4]=='h'){
             u_write("Crashing now...\n");
             u_panic("Crash command invoked from COSH"); // this actually will cause a GPF, but hey, that still panics, so its fine :)
