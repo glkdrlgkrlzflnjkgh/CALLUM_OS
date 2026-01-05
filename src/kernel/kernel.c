@@ -2,7 +2,7 @@
 // ✓ add Kmalloc
 // ✓ add Kfree
 // Filesystem
-// ELF loader
+// ELF loader (1/2 done, did ELF constants a while back.)
 // A video driver?
 // fact: i embarassed myself by trying to fix a "bug" with userland where it wouldnt priv switch to ring 3, the bug was actually a misreport from the probe command! -Callum, project lead..
 // <CONTD> and head maintainer!
@@ -32,7 +32,7 @@ typedef struct free_block {
 extern char _end;
 uintptr_t heap_ptr = (uintptr_t)&_end;
 
-#define HEAP_SIZE 0x100000   // 1 MiB heap for now
+#define HEAP_SIZE 0x800000   // 8 MiB heap for now
 uintptr_t heap_end = (uintptr_t)&_end + HEAP_SIZE;
 static free_block_t* free_list = NULL;
 #define MARKER_STACK_SIZE 1024
