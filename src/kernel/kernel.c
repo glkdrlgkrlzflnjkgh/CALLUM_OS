@@ -307,6 +307,14 @@ static void vga_puthex32_at(int row, int col, uint32_t val, uint8_t attr) {
         VGA[row*VGA_COLS+col++]=vga_cell(c,attr);
     }
 }
+/* Busy-wait for roughly `sec` seconds */
+static void wait_seconds(int sec) {
+    for (int s = 0; s < sec; s++) {
+        for (volatile uint32_t i = 0; i < 50000000; i++) {
+            __asm__ __volatile__("nop");
+        }
+    }
+}
 
 /* panic handler */
 __attribute__((noreturn)) void panic(const char* msg) {
@@ -327,7 +335,7 @@ __attribute__((noreturn)) void panic(const char* msg) {
     vga_puts_at(6,msg_col,msg,BSOD_ATTR);
 
     /* Halt message */
-    const char* halted="System halted. Please restart manually.";
+    const char* halted="System halted. Restarting in roughly 5 seconds...";
     int halt_col=(VGA_COLS-str_len(halted))/2;
     vga_puts_at(8,halt_col,halted,BSOD_ATTR);
 
@@ -351,8 +359,9 @@ __attribute__((noreturn)) void panic(const char* msg) {
         vga_puthex32_at(row,col,esp[i],BSOD_ATTR);
     }
 
-    /* Halt forever */
-    for(;;) __asm__ __volatile__("hlt");
+    /* halt for 5 seconds */
+    wait_seconds(5);
+    outb(0xCF9, 0x06);
 }
 /* ---------- Probes written by irq.S ---------- */
 volatile uint16_t isr_probe_ss = 0;
