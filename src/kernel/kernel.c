@@ -273,7 +273,7 @@ static void speaker_off(void) {
 }
 #define VGA_COLS 80
 #define VGA_ROWS 25
-#define BSOD_ATTR 0x1F  /* white on blue */
+#define BSOD_ATTR 0x4F  /* white on blue */
 
 /* VGA is already defined at line 47:
    static volatile uint16_t* const VGA = (uint16_t*)0xB8000;
@@ -628,6 +628,7 @@ static inline void u_yield(void){ __asm__ __volatile__(".intel_syntax noprefix\n
 static inline void u_exit(void){ __asm__ __volatile__(".intel_syntax noprefix\n\tmov eax,3\n\tint 0x80\n\t.att_syntax prefix\n\t"::: "eax"); }
 
 static void cosh_banner(void){
+    vga_write("----------------------\n",0x0F);
     vga_write("CallumOS Shell (COSH)\n",0x0F);
     vga_write("----------------------\n",0x0F);
 }
@@ -698,7 +699,7 @@ static void user_shell(void){
             outb(0xCF9, 0x06); // full reset, lets just hope that ring 3 can call it.
         } else if(len==5 && line[0]=='c'&&line[1]=='r'&&line[2]=='a'&&line[3]=='s'&&line[4]=='h'){
             u_write("Crashing now...\n");
-            u_panic("Crash command invoked from COSH"); // this actually will cause a GPF, but hey, that still panics, so its fine :)
+            u_panic("Crash command invoked from COSH");
         } else {
             u_write("Unknown command.\n");
         }
@@ -822,7 +823,6 @@ __attribute__((noreturn)) void kernel_main(void){
     outb(0xA1,0xFF);
     keyboard_enable();
     Test_Kmalloc();
-    vga_write("CallumOS kernel V0.1 is loading... \n",0x0F);
     vga_write("TR=",0x0A); print_hex16(tr_probe,0x0A);
     vga_write(" TSS.ss0=",0x0A); print_hex16(tss.ss0,0x0A);
     vga_write(" TSS.esp0=",0x0A); print_hex32(tss.esp0,0x0A); vga_write("\n",0x0A);
