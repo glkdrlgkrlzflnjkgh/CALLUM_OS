@@ -1,7 +1,7 @@
 /* ---------- TODOS  ---------- */
 // ✓ add Kmalloc
 // ✓ add Kfree
-// Filesystem
+// Filesystem (1/3 done, did block_device implimentation!)
 // ELF loader (1/2 done, did ELF constants a while back.)
 // A video driver?
 // fact: i embarassed myself by trying to fix a "bug" with userland where it wouldnt priv switch to ring 3, the bug was actually a misreport from the probe command! -Callum, project lead..
@@ -741,6 +741,23 @@ void Test_Kmalloc() {
    }
    kfree(kmalloc_test);
 }
+
+void Test_Blk_Driver() {
+    vga_write("Testing Block Device Driver...\n", 0x0F);
+    uint8_t buffer[512];
+
+    int status = ata_read28(0, buffer);
+
+    if (status != 0) {
+        panic("Block Device Driver Test FAILED!");
+    }
+
+
+    // Optional: clear buffer after use
+    for (int i = 0; i < 512; i++) {
+        buffer[i] = 0;
+    }
+}
 /* ---------- Kernel entry ---------- */
 __attribute__((noreturn)) void kernel_main(void){
     /* GDT: null, KCS, KDS, UCS, UDS, TSS */
@@ -823,6 +840,7 @@ __attribute__((noreturn)) void kernel_main(void){
     outb(0xA1,0xFF);
     keyboard_enable();
     Test_Kmalloc();
+    Test_Blk_Driver();
     vga_write("TR=",0x0A); print_hex16(tr_probe,0x0A);
     vga_write(" TSS.ss0=",0x0A); print_hex16(tss.ss0,0x0A);
     vga_write(" TSS.esp0=",0x0A); print_hex32(tss.esp0,0x0A); vga_write("\n",0x0A);

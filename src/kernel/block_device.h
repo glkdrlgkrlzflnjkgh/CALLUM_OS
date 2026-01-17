@@ -4,6 +4,6 @@
 #include <stdint.h>
 
 void ata_init();
-void ata_read28(uint32_t lba, uint8_t* buffer);
+int ata_read28(uint32_t lba, void* buffer);
 
 #endif
