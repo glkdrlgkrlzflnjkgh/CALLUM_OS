@@ -15,6 +15,8 @@ GRUB_DIR="$ISO_DIR/boot/grub"
 KERNEL_ELF="$BUILD_DIR/kernel.elf"
 ISO_NAME="CallumOS.iso"
 DISK_IMG="disk.img"
+DISK_SIZE_MB="${DISK_SIZE_MB:-64}"   # size of disk image
+MNT_DIR="${MNT_DIR:-/mnt/callumos}"  # temp mountpoint for FAT32
 
 # Tools (override via env if needed)
 CC="${CC:-gcc}"
@@ -23,6 +25,10 @@ AS="${AS:-gcc}"          # switch to nasm if you want: AS=nasm
 GRUB_MKRESCUE="${GRUB_MKRESCUE:-grub-mkrescue}"
 DD="${DD:-dd}"
 QEMU="${QEMU:-qemu-system-i386}"
+PARTED="${PARTED:-parted}"
+LOSETUP="${LOSETUP:-losetup}"
+MKFS_VFAT="${MKFS_VFAT:-mkfs.vfat}"
+RSYNC="${RSYNC:-rsync}"
 
 # Flags (tweak as needed)
 CFLAGS="${CFLAGS:--m32 -O0 -g -Wall -Wextra -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables}"
@@ -51,6 +57,12 @@ check_tool() {
     command -v "$tool" >/dev/null 2>&1 || error "Required tool '$tool' not found in PATH"
 }
 
+require_root_for_disk_ops() {
+    if [[ "$(id -u)" -ne 0 ]]; then
+        error "Disk image creation requires root (loop devices, partitioning, mount). Re-run with: sudo $0 $*"
+    fi
+}
+
 #######################################
 # Environment checks
 #######################################
@@ -62,6 +74,10 @@ check_env() {
     check_tool "$AS"
     check_tool "$GRUB_MKRESCUE"
     check_tool "$DD"
+    check_tool "$PARTED"
+    check_tool "$LOSETUP"
+    check_tool "$MKFS_VFAT"
+    check_tool "$RSYNC"
 }
 
 #######################################
@@ -74,18 +90,12 @@ prepare_dirs() {
     mkdir -p "$GRUB_DIR"
 }
 
-# Compile all sources under SRC_DIR (.c, .S, .s). Object filenames are created
-# from the source path relative to SRC_DIR, with '/' replaced by '_' to avoid
-# collisions (e.g. src/kernel/foo/bar.c -> build/foo_bar.o).
+# Compile all sources under SRC_DIR (.c, .S, .s).
 compile_sources() {
     log "Scanning source directory for .c/.S/.s files..."
-    local src
-    local rel
-    local obj
-    local ext
+    local src rel obj ext
     local -a objects=()
 
-    # Find relevant source files
     mapfile -t sources < <(find "$SRC_DIR" -type f \( -name '*.c' -o -name '*.S' -o -name '*.s' \) -print)
 
     if [[ ${#sources[@]} -eq 0 ]]; then
@@ -93,7 +103,6 @@ compile_sources() {
     fi
 
     for src in "${sources[@]}"; do
-        # Create a deterministic object filename based on relative path
         rel="${src#"$SRC_DIR"/}"
         obj="$BUILD_DIR/${rel//\//_}"
         obj="${obj%.*}.o"
@@ -110,14 +119,12 @@ compile_sources() {
             S|s)
                 log "Assembling: $src -> $obj"
                 if [[ "${AS##*/}" == "nasm" ]]; then
-                    # Use nasm for .S/.s if requested (nasm expects -f elf32 for 32-bit)
                     nasm -f elf32 "$src" -o "$obj"
                 else
                     "$AS" $ASFLAGS -c "$src" -o "$obj"
                 fi
                 ;;
             *)
-                # shouldn't get here due to find filter
                 log "Skipping unknown file type: $src"
                 continue
                 ;;
@@ -130,7 +137,6 @@ compile_sources() {
         error "No object files produced; aborting"
     fi
 
-    # Export objects as global variable for link step
     COMPILED_OBJECTS=("${objects[@]}")
     ok "Compiled ${#objects[@]} source(s)"
 }
@@ -138,7 +144,6 @@ compile_sources() {
 link_kernel() {
     log "Linking kernel with linker.ld..."
     if [[ -z "${COMPILED_OBJECTS[*]:-}" ]]; then
-        # If COMPILED_OBJECTS isn't set, try to collect any existing .o files in build/
         mapfile -t COMPILED_OBJECTS < <(find "$BUILD_DIR" -maxdepth 1 -type f -name '*.o' -print || true)
     fi
 
@@ -146,12 +151,10 @@ link_kernel() {
         error "No object files to link. Run the build (all) to compile sources first."
     fi
 
-    # Ensure linker script exists
     if [[ ! -f "$SRC_DIR/linker.ld" ]]; then
         error "Linker script not found: $SRC_DIR/linker.ld"
     fi
 
-    # Link. Use LDFLAGS and explicit linker script.
     "$LD" $LDFLAGS -T "$SRC_DIR/linker.ld" -o "$KERNEL_ELF" "${COMPILED_OBJECTS[@]}"
     ok "kernel.elf linked (${#COMPILED_OBJECTS[@]} objects)"
 }
@@ -161,8 +164,6 @@ prepare_iso_tree() {
     mkdir -p "$ISO_DIR/boot"
     cp "$KERNEL_ELF" "$ISO_DIR/boot/"
 
-    # Respect any existing grub configuration placed either at iso/grub.cfg
-    # or iso/boot/grub/grub.cfg. Do NOT create or overwrite grub.cfg if present.
     local grub_cfg_root="$ISO_DIR/grub.cfg"
     local grub_cfg_boot="$GRUB_DIR/grub.cfg"
 
@@ -194,18 +195,75 @@ build_iso() {
     ok "ISO built: $ISO_NAME"
 }
 
-create_disk_image() {
-    log "Creating bootable virtual disk: $DISK_IMG"
-    "$DD" if="$ISO_NAME" of="$DISK_IMG" bs=4M status=progress conv=fsync
-    ok "Disk image created: $DISK_IMG"
+#######################################
+# FAT32 disk image creation
+#######################################
+
+create_fat32_disk_image() {
+    require_root_for_disk_ops "disk"
+
+    log "Creating raw disk image: $DISK_IMG (${DISK_SIZE_MB}MB)"
+    "$DD" if=/dev/zero of="$DISK_IMG" bs=1M count="$DISK_SIZE_MB" status=progress conv=fsync
+
+    log "Partitioning disk image with MBR + single FAT32 partition..."
+    "$PARTED" -s "$DISK_IMG" mklabel msdos
+    "$PARTED" -s "$DISK_IMG" mkpart primary fat32 1MiB 100%
+    "$PARTED" -s "$DISK_IMG" set 1 boot on
+
+    log "Attaching loop device..."
+    local loopdev
+    loopdev="$("$LOSETUP" --find --show --partscan "$DISK_IMG")"
+    log "Using loop device: $loopdev"
+
+    local part="${loopdev}p1"
+    if [[ ! -b "$part" ]]; then
+        part="$loopdev"
+        log "Partition node not found; falling back to $part"
+    fi
+
+    log "Creating FAT32 filesystem on $part..."
+    "$MKFS_VFAT" -F 32 -n "CALLUMOS" "$part"
+
+    log "Mounting FAT32 filesystem at $MNT_DIR..."
+    mkdir -p "$MNT_DIR"
+    mount "$part" "$MNT_DIR"
+
+    log "Copying ISO tree into FAT32 filesystem..."
+    "$RSYNC" -a --no-owner --no-group --no-perms --delete "$ISO_DIR"/ "$MNT_DIR"/
+
+    sync
+
+    log "Installing GRUB into disk image via grub-install..."
+    grub-install \
+        --target=i386-pc \
+        --boot-directory="$MNT_DIR/boot" \
+        --modules="normal multiboot biosdisk part_msdos fat" \
+        "$loopdev"
+
+    sync
+    log "Unmounting..."
+    umount "$MNT_DIR"
+
+    log "Detaching loop device..."
+    "$LOSETUP" -d "$loopdev"
+
+    ok "FAT32 disk image created and GRUB installed: $DISK_IMG"
 }
+
+#######################################
+# QEMU
+#######################################
 
 run_qemu() {
     command -v "$QEMU" >/dev/null 2>&1 || error "QEMU not found; install qemu-system-i386 or set QEMU env var"
     [[ -f "$DISK_IMG" ]] || error "Disk image '$DISK_IMG' not found. Run '$0 all' first."
-    log "Launching QEMU..."
-    "$QEMU" -cdrom "$DISK_IMG" -boot d -m 256M
+    log "Launching QEMU with disk image..."
+    "$QEMU" -drive file="$DISK_IMG",format=raw -boot d -m 256M
 }
+
+#######################################
+# Clean
+#######################################
 
 clean() {
     log "Cleaning build artifacts..."
@@ -222,9 +280,9 @@ usage() {
 Usage: $0 [command]
 
 Commands:
-  all       Build kernel, ISO, and disk image (default)
+  all       Build kernel, ISO, and FAT32 disk image
   iso       Build only the ISO (requires compiled kernel)
-  disk      Build only the disk image from existing ISO
+  disk      Build only the FAT32 disk image from existing ISO (requires root)
   run       Run QEMU with the built disk image
   clean     Remove build artifacts
   help      Show this help
@@ -232,14 +290,16 @@ Commands:
 Examples:
   $0
   $0 all
+  sudo $0 disk
   $0 run
   $0 clean
 
 Notes:
   - If you already provide a grub.cfg anywhere in the iso tree (iso/grub.cfg or iso/boot/grub/grub.cfg),
     the script will NOT create or overwrite it.
-  - Set AS=nasm if you prefer nasm for assembling .S/.s files.
-  - You can override CC, LD, GRUB_MKRESCUE, DD, QEMU, and flags (CFLAGS/ASFLAGS/LDFLAGS) via environment.
+  - Disk image creation uses a single MBR + FAT32 partition and copies the ISO tree into it.
+  - Disk operations (partitioning, mkfs, mount) require root; use sudo for 'all' or 'disk' if needed.
+  - You can override CC, LD, GRUB_MKRESCUE, DD, QEMU, PARTED, LOSETUP, MKFS_VFAT, RSYNC, and flags via environment.
 EOF
 }
 
@@ -254,7 +314,7 @@ main() {
             link_kernel
             prepare_iso_tree
             build_iso
-            create_disk_image
+            create_fat32_disk_image
             ok "Build complete: $DISK_IMG"
             ;;
         iso)
@@ -267,8 +327,8 @@ main() {
             ;;
         disk)
             check_env
-            [[ -f "$ISO_NAME" ]] || error "ISO '$ISO_NAME' not found. Run '$0 all' first."
-            create_disk_image
+            [[ -f "$ISO_NAME" ]] || error "ISO '$ISO_NAME' not found. Run '$0 all' or '$0 iso' first."
+            create_fat32_disk_image
             ;;
         run)
             run_qemu
