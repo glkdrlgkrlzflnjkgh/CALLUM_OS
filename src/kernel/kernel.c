@@ -11,6 +11,7 @@
 /* src/kernel/kernel.c — CallumOS full kernel (i386, Multiboot, VGA TTY, IRQs, syscalls, userland) */
 #include <stdint.h>
 #include <stddef.h>
+#include "string.h"
 #include "elf.h" // Include elf.h, it contains all the constants I need for the upcoming ELF loader.
 #include "block_device.h" // Include block_device.h, it is currently empty apart from a comment, future proofing for the FAT32 implimentation!
 /* ---------- Multiboot header ---------- */
