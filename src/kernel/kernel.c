@@ -336,7 +336,7 @@ __attribute__((noreturn)) void panic(const char* msg) {
     vga_puts_at(6,msg_col,msg,BSOD_ATTR);
 
     /* Halt message */
-    const char* halted="System halted. Restarting in roughly 5 seconds...";
+    const char* halted="SYSTEM HALTED: RESTART MANUALLY";
     int halt_col=(VGA_COLS-str_len(halted))/2;
     vga_puts_at(8,halt_col,halted,BSOD_ATTR);
 
@@ -360,9 +360,6 @@ __attribute__((noreturn)) void panic(const char* msg) {
         vga_puthex32_at(row,col,esp[i],BSOD_ATTR);
     }
 
-    /* halt for 5 seconds */
-    wait_seconds(5);
-    outb(0xCF9, 0x06);
 }
 /* ---------- Probes written by irq.S ---------- */
 volatile uint16_t isr_probe_ss = 0;
