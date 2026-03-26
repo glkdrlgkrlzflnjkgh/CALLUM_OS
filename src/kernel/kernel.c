@@ -327,7 +327,7 @@ __attribute__((noreturn)) void panic(const char* msg) {
             VGA[r*VGA_COLS+c]=vga_cell(' ',BSOD_ATTR);
 
     /* Banner */
-    const char* banner="<--[CALLUMOS KERNEL PANIC]-->";
+    const char* banner="<--[FUCK. A KERNEL PANIC!]-->";
     int banner_col=(VGA_COLS-str_len(banner))/2;
     vga_puts_at(4,banner_col,banner,BSOD_ATTR);
 
@@ -359,6 +359,7 @@ __attribute__((noreturn)) void panic(const char* msg) {
         VGA[row*VGA_COLS+col++]=vga_cell(']',BSOD_ATTR);
         vga_puthex32_at(row,col,esp[i],BSOD_ATTR);
     }
+    for (;;) asm volatile("hlt");
 
 }
 /* ---------- Probes written by irq.S ---------- */
