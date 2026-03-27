@@ -3,7 +3,7 @@
 // ✓ add Kfree
 // Filesystem (1/3 done, did block_device implimentation!)
 // ELF loader (1/2 done, did ELF constants a while back.)
-// A video driver?
+// A video driver? (0/??? done. As I have no freaking idea how to PCLE driver. and GPU driver...)
 // fact: i embarassed myself by trying to fix a "bug" with userland where it wouldnt priv switch to ring 3, the bug was actually a misreport from the probe command! -Callum, project lead..
 // <CONTD> and head maintainer!
 
@@ -13,7 +13,7 @@
 #include <stddef.h>
 #include "string.h"
 #include "elf.h" // Include elf.h, it contains all the constants I need for the upcoming ELF loader.
-#include "block_device.h" // Include block_device.h, it is currently empty apart from a comment, future proofing for the FAT32 implimentation!
+#include "block_device.h" // Include block_device.h, it is implimented. :)
 /* ---------- Multiboot header ---------- */
 
 #define MULTIBOOT_HEADER_MAGIC    0x1BADB002U
