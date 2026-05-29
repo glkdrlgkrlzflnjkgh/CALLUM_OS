@@ -848,5 +848,5 @@ __attribute__((noreturn)) void kernel_main(void){
     vga_write("Entering Callumland shortly.... \n", 0x0F);
     /* Do NOT sti here; user EFLAGS turns IF on at CPL=3 */
     enter_userland(user_entry); // You're in user space, wether you like it or not!
-    panic("kernel_main returned unexpectedly");
+    panic("Potential BUG: kernel_main returned- even though it has the noreturn attribute!!!!");
 }
