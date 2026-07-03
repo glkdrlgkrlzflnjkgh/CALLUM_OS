@@ -309,6 +309,8 @@ static void vga_puthex32_at(int row, int col, uint32_t val, uint8_t attr) {
     }
 }
 /* Busy-wait for roughly `sec` seconds */
+// this is a really bad idea, mostly because this makes the CPU "spin."
+// Replace with some sort of PIT based system in future!
 static void wait_seconds(int sec) {
     for (int s = 0; s < sec; s++) {
         for (volatile uint32_t i = 0; i < 50000000; i++) {
@@ -848,5 +850,5 @@ __attribute__((noreturn)) void kernel_main(void){
     vga_write("Entering Callumland shortly.... \n", 0x0F);
     /* Do NOT sti here; user EFLAGS turns IF on at CPL=3 */
     enter_userland(user_entry); // You're in user space, wether you like it or not!
-    panic("Potential BUG: kernel_main returned- even though it has the noreturn attribute!!!!");
+    panic("Kernel BUG! ! ! kernel_main has returned even though it shouldnt!");
 }
