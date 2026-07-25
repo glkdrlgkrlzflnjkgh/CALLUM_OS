@@ -9,8 +9,6 @@
 
 
 /* src/kernel/kernel.c — CallumOS full kernel (i386, Multiboot, VGA TTY, IRQs, syscalls, userland) */
-#include <stdint.h>
-#include <stddef.h>
 #include "string.h"
 #include "elf.h" // Include elf.h, it contains all the constants I need for the upcoming ELF loader.
 #include "block_device.h" // Include block_device.h, it is implimented. :)
@@ -39,7 +37,7 @@ static free_block_t* free_list = NULL;
 #define MARKER_STACK_SIZE 1024
 uintptr_t marker_stack[MARKER_STACK_SIZE];
 int marker_top = 0;
-
+extern char KERNEL_START[];
 #define MIN_SPLIT_SIZE (sizeof(free_block_t) + 8)
 /* ---------- ISR/IRQ externs (irq.S) ---------- */
 extern void irq_timer(void);
@@ -784,7 +782,9 @@ __attribute__((noreturn)) void kernel_main(void){
     ltr(TSSS);
     tr_probe = str_read();
     vga_clear(0x0c);
-    vga_write("Setting up exceptions\n",0x0c);
+    vga_write("Kernel starts at: ", 0x0c);
+    vga_write(KERNEL_START, 0x0c);
+    vga_write("\nSetting up exceptions\n",0x0c);
     /* Exceptions */
     idt_set_gate(0x00,(uint32_t)isr_exc_0x00,KCS,0x8E);
     idt_set_gate(0x01,(uint32_t)isr_exc_0x01,KCS,0x8E);
@@ -850,5 +850,5 @@ __attribute__((noreturn)) void kernel_main(void){
     vga_write("Entering Callumland shortly.... \n", 0x0F);
     /* Do NOT sti here; user EFLAGS turns IF on at CPL=3 */
     enter_userland(user_entry); // You're in user space, wether you like it or not!
-    panic("Kernel BUG! ! ! kernel_main has returned even though it shouldnt!");
+    panic("Kernel BUG! ! ! kernel_main has returned even though it shouldnt!"); // uh oh
 }

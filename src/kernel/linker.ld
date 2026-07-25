@@ -4,6 +4,7 @@ ENTRY(kernel_main)
 SECTIONS {
   /* Load kernel at 1 MiB */
   . = 1M;
+  KERNEL_START = .;
 
   /* Multiboot header must come first */
   .multiboot : {
