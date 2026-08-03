@@ -12,6 +12,7 @@
 #include "string.h"
 #include "elf.h" // Include elf.h, it contains all the constants I need for the upcoming ELF loader.
 #include "block_device.h" // Include block_device.h, it is implimented. :)
+#include <stdint.h>
 /* ---------- Multiboot header ---------- */
 
 #define MULTIBOOT_HEADER_MAGIC    0x1BADB002U
@@ -327,7 +328,7 @@ __attribute__((noreturn)) void panic(const char* msg) {
             VGA[r*VGA_COLS+c]=vga_cell(' ',BSOD_ATTR);
 
     /* Banner */
-    const char* banner="<--[FUCK. A KERNEL PANIC!]-->";
+    const char* banner="aiee! Kernel panic!";
     int banner_col=(VGA_COLS-str_len(banner))/2;
     vga_puts_at(4,banner_col,banner,BSOD_ATTR);
 
