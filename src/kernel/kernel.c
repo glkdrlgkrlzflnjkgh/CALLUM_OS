@@ -851,5 +851,5 @@ __attribute__((noreturn)) void kernel_main(void){
     vga_write("Entering Callumland shortly.... \n", 0x0F);
     /* Do NOT sti here; user EFLAGS turns IF on at CPL=3 */
     enter_userland(user_entry); // You're in user space, wether you like it or not!
-    panic("Kernel BUG! ! ! kernel_main has returned even though it shouldnt!"); // uh oh
+    panic("!!!! KERNEL_MAIN RETURNED !!!!"); // This should NEVER HAPPEN! If it does, we've fucked up, big time. (the CPU will execute garbage instructions if this happens, and reboot.)
 }
