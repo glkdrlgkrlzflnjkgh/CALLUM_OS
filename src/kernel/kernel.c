@@ -764,11 +764,17 @@ void Test_Blk_Driver() {
     }
 
 
-    // okay lets print part of the buffer.
+    // Print 8 bytes per line
     for (int i = 0; i < 32; i++) {
-        vga_puthex8(buffer[i], 0x0F);
-        vga_write("\n", 0x0F);
+        vga_puthex8(buffer[i], 0x0c);
+        vga_write(" ", 0x0c);
+
+        // After every 8 bytes, print a newline
+        if ((i % 8) == 7) {
+            vga_write("\n", 0x0c);
+        }
     }
+
 
     // and now we will wipe the buffer, memory freeing go brrrr.
     for (int i = 0; i < 512; i++) {
