@@ -14,7 +14,7 @@
 #include "block_device.h" // Include block_device.h, it is implimented. :)
 #include <stdint.h>
 /* ---------- Multiboot header ---------- */
-
+void panic(const char* msg);
 #define MULTIBOOT_HEADER_MAGIC    0x1BADB002U
 #define MULTIBOOT_HEADER_FLAGS    0x0U
 #define MULTIBOOT_HEADER_CHECKSUM (-(MULTIBOOT_HEADER_MAGIC + MULTIBOOT_HEADER_FLAGS))
@@ -122,7 +122,7 @@ void* kmalloc(size_t size) {
 
     // 2. Fall back to bump allocation
     if (heap_ptr + total_size > heap_end) {
-        return NULL; // Out of memory
+        panic("Ran out of memory in kernel space!!!!"); // Out of memory; this is really bad. As there could be a runaway allocation in kernel space.
     }
 
     free_block_t* block = (free_block_t*)heap_ptr;
@@ -307,6 +307,17 @@ static void vga_puthex32_at(int row, int col, uint32_t val, uint8_t attr) {
         VGA[row*VGA_COLS+col++]=vga_cell(c,attr);
     }
 }
+
+void vga_puthex8(uint8_t val, uint8_t attr) {
+    const char* hex = "0123456789ABCDEF";
+    char buf[3];
+    buf[0] = hex[(val >> 4) & 0xF];
+    buf[1] = hex[val & 0xF];
+    buf[2] = '\0';
+    vga_write(buf, attr);
+}
+
+
 /* Busy-wait for roughly `sec` seconds */
 // this is a really bad idea, mostly because this makes the CPU "spin."
 // Replace with some sort of PIT based system in future!
@@ -328,7 +339,7 @@ __attribute__((noreturn)) void panic(const char* msg) {
             VGA[r*VGA_COLS+c]=vga_cell(' ',BSOD_ATTR);
 
     /* Banner */
-    const char* banner="aiee! Kernel panic!";
+    const char* banner="KERNEL PANIC";
     int banner_col=(VGA_COLS-str_len(banner))/2;
     vga_puts_at(4,banner_col,banner,BSOD_ATTR);
 
@@ -337,7 +348,7 @@ __attribute__((noreturn)) void panic(const char* msg) {
     vga_puts_at(6,msg_col,msg,BSOD_ATTR);
 
     /* Halt message */
-    const char* halted="SYSTEM HALTED: RESTART MANUALLY";
+    const char* halted="To prevent any further issues, the CPU has halted. Please reboot the system.";
     int halt_col=(VGA_COLS-str_len(halted))/2;
     vga_puts_at(8,halt_col,halted,BSOD_ATTR);
 
@@ -753,10 +764,17 @@ void Test_Blk_Driver() {
     }
 
 
-    // Optional: clear buffer after use
+    // okay lets print part of the buffer.
+    for (int i = 0; i < 32; i++) {
+        vga_puthex8(buffer[i], 0x0F);
+        vga_write("\n", 0x0F);
+    }
+
+    // and now we will wipe the buffer, memory freeing go brrrr.
     for (int i = 0; i < 512; i++) {
         buffer[i] = 0;
     }
+
 }
 /* ---------- Kernel entry ---------- */
 __attribute__((noreturn)) void kernel_main(void){
@@ -851,5 +869,5 @@ __attribute__((noreturn)) void kernel_main(void){
     vga_write("Entering Callumland shortly.... \n", 0x0F);
     /* Do NOT sti here; user EFLAGS turns IF on at CPL=3 */
     enter_userland(user_entry); // You're in user space, wether you like it or not!
-    panic("!!!! KERNEL_MAIN RETURNED !!!!"); // This should NEVER HAPPEN! If it does, we've fucked up, big time. (the CPU will execute garbage instructions if this happens, and reboot.)
+    panic("OH GOD. WE'VE SHITFUCKED, KERNEL MAIN RETURNED!!!"); // This should NEVER HAPPEN! If it does, we've fucked up, big time. (the CPU will execute garbage instructions if this happens, and reboot.)
 }
