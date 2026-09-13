@@ -139,22 +139,39 @@ DECL_IRQ(0x2F)
 /* Trap gate, DPL=3 in IDT. Preserve registers, pass EAX (num), EBX (arg) to C, write return into saved EAX. */
 isr_syscall:
     cld
-    pusha                           /* push EAX,ECX,EDX,EBX,ESP,EBP,ESI,EDI */
 
-    /* Extract syscall number and arg from saved pusha frame */
-    mov eax, DWORD PTR [esp+0]      /* saved EAX (syscall number) */
-    mov ebx, DWORD PTR [esp+12]     /* saved EBX (first argument) */
+    /* On entry: [esp] = EAX (from int 0x80) only if we have an interrupt frame? no. The actual
+       software interrupt pushes EIP, CS, EFLAGS before our handler runs, so use the user-visible
+       register values exactly as set by the caller. */
+    push ds
+    push es
+    push fs
+    push gs
 
-    /* Call C handler: uint32_t ret = isr_syscall_c(eax, ebx) */
+    /* The saved-register memory layout is EDI, ESI, EBP, original ESP,
+       EBX, EDX, ECX, EAX. */
+    pusha
+
+    /* Do not load the selector into AX until after pusha: AX is part of EAX. */
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+
+    mov eax, DWORD PTR [esp+28]     /* saved EAX = syscall number */
+    mov ebx, DWORD PTR [esp+16]     /* saved EBX = argument */
+
     push ebx
     push eax
     call isr_syscall_c
-    add  esp, 8
+    add esp, 8
 
-    /* Place ret into saved EAX so user sees it after iret */
-    mov DWORD PTR [esp+0], eax
+    mov DWORD PTR [esp+28], eax
 
     popa
+    pop gs
+    pop fs
+    pop es
+    pop ds
     iret
 
 /* ========== Exception stubs ========== */

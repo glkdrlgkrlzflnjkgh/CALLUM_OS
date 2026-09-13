@@ -12,7 +12,9 @@
 #include "string.h"
 #include "elf.h" // Include elf.h, it contains all the constants I need for the upcoming ELF loader.
 #include "block_device.h" // Include block_device.h, it is implimented. :)
-#include <stdint.h>
+#include <stdint.h> // avoid compiler errors, sorry for that include!
+#include "constants/vga_consts.h"
+#include "constants/mem_consts.h"
 /* ---------- Multiboot header ---------- */
 void panic(const char* msg);
 #define MULTIBOOT_HEADER_MAGIC    0x1BADB002U
@@ -32,12 +34,13 @@ typedef struct free_block {
 extern char _end;
 uintptr_t heap_ptr = (uintptr_t)&_end;
 
-#define HEAP_SIZE 0x800000   // 8 MiB heap for now
+
 uintptr_t heap_end = (uintptr_t)&_end + HEAP_SIZE;
 static free_block_t* free_list = NULL;
 #define MARKER_STACK_SIZE 1024
 uintptr_t marker_stack[MARKER_STACK_SIZE];
 int marker_top = 0;
+volatile uint64_t ticks = 0;
 extern char KERNEL_START[];
 #define MIN_SPLIT_SIZE (sizeof(free_block_t) + 8)
 /* ---------- ISR/IRQ externs (irq.S) ---------- */
@@ -207,6 +210,11 @@ static void vga_clear(uint8_t attr){
     for(int i=0;i<80*25;i++) VGA[i] = fill;
     cursor_row=0; cursor_col=0; vga_hw_cursor_set(cursor_row,cursor_col);
 }
+
+static void vga_clear_panic() {
+    vga_clear(BSOD_ATTR);
+}
+
 static void vga_putc(char c, uint8_t attr) {
     if (c == '\n') {
         cursor_row++;
@@ -271,9 +279,7 @@ static void speaker_off(void) {
     uint8_t tmp = inb(0x61);
     outb(0x61, tmp & ~3); // Disable speaker
 }
-#define VGA_COLS 80
-#define VGA_ROWS 25
-#define BSOD_ATTR 0x4F  /* white on blue */
+
 
 /* VGA is already defined at line 47:
    static volatile uint16_t* const VGA = (uint16_t*)0xB8000;
@@ -318,21 +324,20 @@ void vga_puthex8(uint8_t val, uint8_t attr) {
 }
 
 
-/* Busy-wait for roughly `sec` seconds */
-// this is a really bad idea, mostly because this makes the CPU "spin."
-// Replace with some sort of PIT based system in future!
-static void wait_seconds(int sec) {
-    for (int s = 0; s < sec; s++) {
-        for (volatile uint32_t i = 0; i < 50000000; i++) {
-            __asm__ __volatile__("nop");
-        }
-    }
+
+
+// AT LAST! A replacement for that dumb busy-wait loop.
+// its PIT based, so it uses the PIT IRQ to count ticks, and then waits for the ticks to reach the target value.
+void delay_ms(uint32_t ms){
+    uint64_t target = ticks + (ms / 10); // 10ms per tick at 100Hz
+    while (ticks < target)
+        __asm__ __volatile__("hlt");
 }
 
 /* panic handler */
 __attribute__((noreturn)) void panic(const char* msg) {
-    __asm__ __volatile__("cli");   // disable interrupts
-
+    __asm__ __volatile__("sti"); // ensure interrupts are still on- we'll need them for the auto-reboot.
+    // ive actually kept IRQs on, so the PIT IRQ can still fire!
     /* Clear screen */
     for (int r=0;r<VGA_ROWS;r++)
         for (int c=0;c<VGA_COLS;c++)
@@ -348,7 +353,7 @@ __attribute__((noreturn)) void panic(const char* msg) {
     vga_puts_at(6,msg_col,msg,BSOD_ATTR);
 
     /* Halt message */
-    const char* halted="To prevent any further issues, the CPU has halted. Please reboot the system.";
+    const char* halted="To prevent any further issues, the CPU has halted. Rebooting in 5 seconds...";
     int halt_col=(VGA_COLS-str_len(halted))/2;
     vga_puts_at(8,halt_col,halted,BSOD_ATTR);
 
@@ -371,7 +376,9 @@ __attribute__((noreturn)) void panic(const char* msg) {
         VGA[row*VGA_COLS+col++]=vga_cell(']',BSOD_ATTR);
         vga_puthex32_at(row,col,esp[i],BSOD_ATTR);
     }
-    for (;;) asm volatile("hlt");
+   delay_ms(5000);        // uses PIT ticks, requires interrupts On
+   outb(0x64, 0xFE); // send CPU reset command to keyboard controller
+   __asm__ __volatile__("cli; hlt"); // halt CPU if reset fails, and also disable interrupts to prevent further issues
 
 }
 /* ---------- Probes written by irq.S ---------- */
@@ -443,6 +450,7 @@ static inline void load_kernel_segments(void){
     __asm__ __volatile__(".intel_syntax noprefix\n\tmov ax,0x10\n\tmov ds,ax\n\tmov es,ax\n\tmov fs,ax\n\tmov gs,ax\n\tmov ss,ax\n\t.att_syntax prefix\n\t"::: "ax");
 }
 static void idt_set_gate(uint8_t num,uint32_t base,uint16_t sel,uint8_t flags){
+    vga_write("[idt_set_gate] Setting IDT gate ",0x0C); print_hex8(num,0x0C); vga_write("\n",0x0C);
     idt[num].base_lo=base&0xFFFF; idt[num].sel=sel; idt[num].always0=0; idt[num].flags=flags; idt[num].base_hi=(base>>16)&0xFFFF;
 }
 
@@ -520,15 +528,28 @@ void irq_unhandled_c(uint8_t vec){
 }
 
 void irq_timer_c(void){
-    static uint32_t ticks=0; (void)ticks; ticks++;
-    outb(0x20,0x20); /* boss EOI */
+    ticks++;
+
+    if (ticks >= 1000000)   // reset every ~2.7 hours at 100Hz
+        ticks = 0;
+
+    outb(0x20, 0x20);       // boss EOI
 }
 
-/* ---------- Syscalls ---------- */
-enum { SYS_write=1, SYS_readch=2, SYS_exit=3, SYS_yield=4, SYS_alloc=5, SYS_reboot=6 }; // SYS_alloc is...
-// <contd> unsed for now!
 
-/* Single, consistent signature returning uint32_t (assembly stub writes back to saved EAX) */
+/* ---------- Syscalls ---------- */
+enum {
+    SYS_write = 1,
+    SYS_readch = 2,
+    SYS_exit = 3,
+    SYS_yield = 4,
+    SYS_alloc = 5,
+    SYS_reboot = 6,
+    SYS_panic = 7,
+    SYS_ENOSYS = 0xFFFFFFFFU
+};
+
+/* int 0x80 ABI: EAX=syscall number, EBX=argument, EAX=return value. */
 uint32_t isr_syscall_c(uint32_t num, uint32_t arg){
     switch(num){
         case SYS_write:
@@ -542,11 +563,15 @@ uint32_t isr_syscall_c(uint32_t num, uint32_t arg){
         case SYS_yield:
             /* cooperative placeholder */
             return 0;
-	case SYS_reboot:
-	     return 0;
+        case SYS_alloc:
+            return (uint32_t)kmalloc((size_t)arg);
+        case SYS_reboot:
+            outb(0xCF9, 0x06);
+            for (;;) { __asm__ __volatile__("hlt"); }
+        case SYS_panic:
+            panic((const char*)arg);
         default:
-            /* Don’t panic — signal ENOSYS to userland */
-            return 0xFFFFFFFFU;
+            return SYS_ENOSYS;
     }
 }
 
@@ -602,71 +627,88 @@ void exc_pf_c(uint32_t err, uint32_t eip, uint16_t cs, uint32_t eflags){
     vga_write(" EFLAGS=",0x0C); print_hex32(eflags,0x0C); vga_write("\n",0x0C);
     panic("Page fault");
 }
-// syscall numbers
-#define SYS_WRITE 1
-#define SYS_READCH 2
-#define SYS_PANIC 3
-// syscall dispatcher (kernel side)
-int syscall_dispatch(int num, const char* arg) {
-    switch (num) {
-        case SYS_WRITE:
-            vga_write(arg, 0x0F);   // call your existing VGA text routine
-            return 0;               // success
-        case SYS_READCH:
-            return kbuf_pop();      // call into your keyboard buffer logic
-        case SYS_PANIC:
-            panic(arg); // I think the kernel might need some deep breaths after this...
-        default:
-            panic("Bad syscall!");
-    }
+/* ---------- User-mode helpers (COSH) ---------- */
+/* Keep the syscall number in EAX so the assembly stub can preserve and return it. */
+static inline uint32_t u_syscall(uint32_t number, uint32_t arg) {
+    __asm__ __volatile__(
+        ".intel_syntax noprefix\n\t"
+        "int 0x80\n\t"
+        ".att_syntax prefix\n\t"
+        : "+a"(number)
+        : "b"(arg)
+        : "cc", "ecx", "edx", "memory");
+    return number;
 }
 
-
-
-/* ---------- User-mode helpers (COSH) ---------- */
 static inline int u_readch(void) {
-    return syscall_dispatch(SYS_READCH, NULL);
+    return (int32_t)u_syscall(SYS_readch, 0);
 }
 
 static inline int u_write(const char* s) {
-    return syscall_dispatch(SYS_WRITE, s);
+    return (int)u_syscall(SYS_write, (uint32_t)s);
 }
 
-static inline int u_panic(const char* s) {
-    return syscall_dispatch(SYS_PANIC,s);
+static void u_write_hex16(uint16_t value) {
+    const char* hex = "0123456789ABCDEF";
+    char out[5];
+    out[0] = hex[(value >> 12) & 0xF];
+    out[1] = hex[(value >> 8) & 0xF];
+    out[2] = hex[(value >> 4) & 0xF];
+    out[3] = hex[value & 0xF];
+    out[4] = '\0';
+    u_write(out);
 }
-static inline void u_yield(void){ __asm__ __volatile__(".intel_syntax noprefix\n\tmov eax,4\n\tint 0x80\n\t.att_syntax prefix\n\t"::: "eax"); }
-static inline void u_exit(void){ __asm__ __volatile__(".intel_syntax noprefix\n\tmov eax,3\n\tint 0x80\n\t.att_syntax prefix\n\t"::: "eax"); }
+
+static void u_write_hex32(uint32_t value) {
+    const char* hex = "0123456789ABCDEF";
+    char out[9];
+    for (int i = 0; i < 8; i++) out[7 - i] = hex[(value >> (i * 4)) & 0xF];
+    out[8] = '\0';
+    u_write(out);
+}
+
+__attribute__((noreturn)) static inline void u_panic(const char* s) {
+    (void)u_syscall(SYS_panic, (uint32_t)s);
+    for (;;) { __asm__ __volatile__("hlt"); }
+}
+static inline void u_yield(void) { (void)u_syscall(SYS_yield, 0); }
+__attribute__((noreturn)) static inline void u_exit(void) {
+    (void)u_syscall(SYS_exit, 0);
+    for (;;) { __asm__ __volatile__("hlt"); }
+}
 
 static void cosh_banner(void){
-    vga_write("----------------------\n",0x0F);
-    vga_write("CallumOS Shell (COSH)\n",0x0F);
-    vga_write("----------------------\n",0x0F);
+    u_write("----------------------\n");
+    u_write("CallumOS Shell (COSH)\n");
+    u_write("----------------------\n");
 }
 static void show_isr_stack_probe(void){
-    vga_write("ISR CPL=",0x0E); print_hex16(isr_probe_cpl,0x0E);
-    vga_write(" SS=",0x0E); print_hex16(isr_probe_ss,0x0E);
-    vga_write(" ESP=",0x0E); print_hex32(isr_probe_esp,0x0E);
-    vga_write(" TR=",0x0E); print_hex16(tr_probe,0x0E); vga_write("\n",0x0E);
+    u_write("ISR CPL="); u_write_hex16(isr_probe_cpl);
+    u_write(" SS="); u_write_hex16(isr_probe_ss);
+    u_write(" ESP="); u_write_hex32(isr_probe_esp);
+    u_write(" TR="); u_write_hex16(tr_probe); u_write("\n");
 }
 static void show_stack_bounds(void){
     uint32_t base = (uint32_t)kstack;
     uint32_t top  = base + sizeof(kstack);
-    vga_write("kstack base=",0x0A); print_hex32(base,0x0A);
-    vga_write(" top=",0x0A); print_hex32(top,0x0A);
-    vga_write(" TSS.esp0=",0x0A); print_hex32(tss.esp0,0x0A);
-    vga_write(" TSS.ss0=",0x0A); print_hex16(tss.ss0,0x0A); vga_write("\n",0x0A);
+    vga_write("kstack base=", 0x0A); print_hex32(base, 0x0A);
+    vga_write(" top=", 0x0A); print_hex32(top, 0x0A);
+    vga_write(" TSS.esp0=", 0x0A); print_hex32(tss.esp0, 0x0A);
+    vga_write(" TSS.ss0=", 0x0A); print_hex16(tss.ss0, 0x0A); vga_write("\n", 0x0A);
 }
 static void show_ret_frame(void){
-    vga_write("RET CS=",0x0E); print_hex16(ret_cs,0x0E);
-    vga_write(" EIP=",0x0E); print_hex32(ret_eip,0x0E);
-    vga_write(" EFLAGS=",0x0E); print_hex32(ret_eflags,0x0E);
-    vga_write(" SS=",0x0E); print_hex16(ret_ss,0x0E);
-    vga_write(" ESP=",0x0E); print_hex32(ret_esp,0x0E); vga_write("\n",0x0E);
+    u_write("RET CS="); u_write_hex16(ret_cs);
+    u_write(" EIP="); u_write_hex32(ret_eip);
+    u_write(" EFLAGS="); u_write_hex32(ret_eflags);
+    u_write(" SS="); u_write_hex16(ret_ss);
+    u_write(" ESP="); u_write_hex32(ret_esp); u_write("\n");
 }
 
 /* ---------- COSH user shell ---------- */
 static void user_shell(void){
+    // there used to be a beep here. Got removed because linda from the unpaid interns department got distressed over it! (JOKE! I removed it because... it caused a general protection fault, which led to a kernel panic. Oops.)
+    // but if you want to break your install and make it permanent via that being compilied in, uncomment the line below (please dont)
+    //speaker_on(440); delay_ms(100); speaker_off();
     cosh_banner();
     // DID YOU KNOW? on this line, a message used to get printed, I did that to debug the hang when the shell launched!
     u_write("Type 'help' or 'echo X'.\n\n");
@@ -707,7 +749,7 @@ static void user_shell(void){
             u_write(s); u_write("\n");
         } else if(len==4 && line[0]=='e'&&line[1]=='x'&&line[2]=='i'&&line[3]=='t'){
             u_write("Bye.\n");
-            outb(0xCF9, 0x06); // full reset, lets just hope that ring 3 can call it.
+            (void)u_syscall(SYS_reboot, 0);
         } else if(len==5 && line[0]=='c'&&line[1]=='r'&&line[2]=='a'&&line[3]=='s'&&line[4]=='h'){
             u_write("Crashing now...\n");
             u_panic("Crash command invoked from COSH");
@@ -720,7 +762,7 @@ static void user_shell(void){
 /* ---------- Enter userland ---------- */
 __attribute__((noreturn))
 static void enter_userland(void (*entry)(void)){
-    vga_write("entering callumland!\n",0x0F);
+    vga_write("entering userland\n",0x0F);
     uint32_t uesp = (uint32_t)user_stack + sizeof(user_stack) - 4;
     __asm__ __volatile__(
         ".intel_syntax noprefix\n\t"
@@ -783,6 +825,7 @@ void Test_Blk_Driver() {
 
 }
 /* ---------- Kernel entry ---------- */
+// OH CRAP- THE KERNEL'S ENTRYPOINT IS... IS *NAKED!!!* AND I JUST SAW ITS PRIVATE PARTS! HELP! HELP! SOMEONE GET ME A... relaxing heartbeat sound? ... ah thats nice and rythmic. Anyway, back on topic: OH GOD ITS NAKED EVERYONE PANIC- {we'll be right back!}
 __attribute__((noreturn)) void kernel_main(void){
     /* GDT: null, KCS, KDS, UCS, UDS, TSS */
     gdt_set(0,0,0,0,0);
@@ -802,13 +845,12 @@ __attribute__((noreturn)) void kernel_main(void){
 
     gp.limit=sizeof(gdt)-1; gp.base=(uint32_t)&gdt; lgdt(&gp);
     load_kernel_segments();
+    
 
     /* Load TR and capture it */
     ltr(TSSS);
     tr_probe = str_read();
-    vga_clear(0x0c);
-    vga_write("Kernel starts at: ", 0x0c);
-    vga_write(KERNEL_START, 0x0c);
+    vga_write("--- CALLUMOS KERNEL STARTING ---\n", 0x0F);
     vga_write("\nSetting up exceptions\n",0x0c);
     /* Exceptions */
     idt_set_gate(0x00,(uint32_t)isr_exc_0x00,KCS,0x8E);
@@ -872,8 +914,8 @@ __attribute__((noreturn)) void kernel_main(void){
     vga_write(" TSS.esp0=",0x0A); print_hex32(tss.esp0,0x0A); vga_write("\n",0x0A);
     vga_write("Launching COSH...\n\n",0x0F);
     show_stack_bounds();
-    vga_write("Entering Callumland shortly.... \n", 0x0F);
-    /* Do NOT sti here; user EFLAGS turns IF on at CPL=3 */
+    vga_write("Entering userland shortly.... \n", 0x0F);;
+    /* Do NOT sti here! user EFLAGS turns IF on at CPL=3 */
     enter_userland(user_entry); // You're in user space, wether you like it or not!
     panic("OH GOD. WE'VE SHITFUCKED, KERNEL MAIN RETURNED!!!"); // This should NEVER HAPPEN! If it does, we've fucked up, big time. (the CPU will execute garbage instructions if this happens, and reboot.)
 }

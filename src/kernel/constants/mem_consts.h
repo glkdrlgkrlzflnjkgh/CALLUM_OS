@@ -1,0 +1,1 @@
+#define HEAP_SIZE 0x800000  // 8 MiB heap for now, I dont know how big the kernel will be, so I just made it 8 MiB for now. I can always change it later.

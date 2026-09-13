@@ -258,7 +258,7 @@ run_qemu() {
     command -v "$QEMU" >/dev/null 2>&1 || error "QEMU not found; install qemu-system-i386 or set QEMU env var"
     [[ -f "$DISK_IMG" ]] || error "Disk image '$DISK_IMG' not found. Run '$0 all' first."
     log "Launching QEMU with disk image..."
-    "$QEMU" -drive file="$DISK_IMG",format=raw -boot d -m 256M
+    "$QEMU" -drive file="$DISK_IMG",format=raw -boot d -m 256M -smp 4
 }
 
 #######################################
