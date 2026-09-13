@@ -19,9 +19,11 @@ system.
 - PIT timer and PS/2 keyboard input
 - Ring-3 COSH shell
 - `int 0x80` system calls for writing, keyboard input, allocation, yielding,
-  exiting, rebooting, and panic testing
+	exiting, rebooting, panic testing, and FAT32 directory access
 - Simple kernel heap allocator with `kmalloc` and `kfree`
 - Basic ATA PIO LBA28 read support
+- FAT32 partition mounting and short-name directory traversal
+- COSH `ls`, `cd`, and `pwd` commands
 
 ELF32 data structures are present for future loading work. A complete ELF
 loader and process scheduler are not implemented yet.
@@ -35,6 +37,8 @@ iso/boot/grub/grub.cfg   GRUB menu configuration
 src/kernel/kernel.c      Kernel entry point and most kernel services
 src/kernel/irq.S         Interrupt, exception, and syscall stubs
 src/kernel/block_device.c ATA PIO block-device code
+src/kernel/fat32.c       FAT32 mount and directory traversal
+src/kernel/fat32.h       FAT32 kernel interface
 src/kernel/elf.h         ELF32 type and program-header definitions
 src/kernel/linker.ld     Kernel linker script; loads at 1 MiB
 build/                   Generated object files and kernel ELF
@@ -105,7 +109,8 @@ contains shutdown and reboot entries.
 ## Kernel Flow
 
 The kernel starts in `kernel_main`, installs the GDT, TSS, IDT, PIC, PIT, and
-keyboard support, runs basic allocator and ATA tests, and then enters COSH.
+keyboard support, runs basic allocator and ATA tests, mounts the FAT32
+partition, and then enters COSH.
 
 `enter_userland` uses `iret` to load ring-3 `CS`, `SS`, `EIP`, and `ESP`. COSH
 invokes system calls with `int 0x80`. The CPU changes to the TSS ring-0 stack,
@@ -114,6 +119,9 @@ executes the kernel syscall handler, and `iret` returns to ring 3.
 Useful COSH commands include:
 
 ```text
+ls [DIR] List a directory
+cd DIR   Change directory
+pwd      Print the working directory
 help     List commands
 echo X   Print X
 probe    Show interrupt privilege/stack probes
@@ -122,6 +130,11 @@ ret      Show the last recorded return frame
 exit     Reboot the machine
 crash    Trigger the kernel panic path
 ```
+
+The current FAT32 implementation supports short 8.3 names, directory
+traversal, and basic `mkdir` support. Long filenames, general file reads and
+writes, deletion, and directory growth are planned for the next filesystem
+step.
 
 ## Development Notes
 

@@ -12,6 +12,7 @@
 #include "string.h"
 #include "elf.h" // Include elf.h, it contains all the constants I need for the upcoming ELF loader.
 #include "block_device.h" // Include block_device.h, it is implimented. :)
+#include "fat32.h"
 #include <stdint.h> // avoid compiler errors, sorry for that include!
 #include "constants/vga_consts.h"
 #include "constants/mem_consts.h"
@@ -546,10 +547,18 @@ enum {
     SYS_alloc = 5,
     SYS_reboot = 6,
     SYS_panic = 7,
+    SYS_ls = 8,
+    SYS_cd = 9,
+    SYS_pwd = 10,
+    SYS_mkdir = 11,
     SYS_ENOSYS = 0xFFFFFFFFU
 };
 
 /* int 0x80 ABI: EAX=syscall number, EBX=argument, EAX=return value. */
+static void fat32_print_to_vga(const char *text) {
+    vga_write(text, 0x07);
+}
+
 uint32_t isr_syscall_c(uint32_t num, uint32_t arg){
     switch(num){
         case SYS_write:
@@ -570,6 +579,17 @@ uint32_t isr_syscall_c(uint32_t num, uint32_t arg){
             for (;;) { __asm__ __volatile__("hlt"); }
         case SYS_panic:
             panic((const char*)arg);
+        case SYS_ls:
+            return (uint32_t)(fat32_ls((const char*)arg, fat32_print_to_vga) == 0 ? 0 : -1);
+        case SYS_cd:
+            return (uint32_t)(fat32_chdir((const char*)arg) == 0 ? 0 : -1);
+        case SYS_pwd:
+            if (!fat32_is_mounted()) return (uint32_t)-1;
+            fat32_pwd(fat32_print_to_vga);
+            fat32_print_to_vga("\n");
+            return 0;
+        case SYS_mkdir:
+            return (uint32_t)(fat32_mkdir((const char*)arg) == 0 ? 0 : -1);
         default:
             return SYS_ENOSYS;
     }
@@ -672,6 +692,10 @@ __attribute__((noreturn)) static inline void u_panic(const char* s) {
     for (;;) { __asm__ __volatile__("hlt"); }
 }
 static inline void u_yield(void) { (void)u_syscall(SYS_yield, 0); }
+static inline int u_ls(const char *path) { return (int)u_syscall(SYS_ls, (uint32_t)path); }
+static inline int u_cd(const char *path) { return (int)u_syscall(SYS_cd, (uint32_t)path); }
+static inline int u_pwd(void) { return (int)u_syscall(SYS_pwd, 0); }
+static inline int u_mkdir(const char *path) { return (int)u_syscall(SYS_mkdir, (uint32_t)path); }
 __attribute__((noreturn)) static inline void u_exit(void) {
     (void)u_syscall(SYS_exit, 0);
     for (;;) { __asm__ __volatile__("hlt"); }
@@ -711,7 +735,7 @@ static void user_shell(void){
     //speaker_on(440); delay_ms(100); speaker_off();
     cosh_banner();
     // DID YOU KNOW? on this line, a message used to get printed, I did that to debug the hang when the shell launched!
-    u_write("Type 'help' or 'echo X'.\n\n");
+    u_write("Type 'help', 'ls', 'cd DIR', or 'echo X'.\n\n");
     char line[2048]; int len=0;
     for(;;){
         u_write("COSH> "); len=0;
@@ -729,7 +753,20 @@ static void user_shell(void){
             }
         }
         if(len==0) continue;
-        if(len>=5 && line[0]=='p'&&line[1]=='r'&&line[2]=='o'&&line[3]=='b'&&line[4]=='e'){
+        if(len>=2 && line[0]=='l'&&line[1]=='s'&&(len==2||line[2]==' ')){
+            const char* path=line+2; while(*path==' ') path++;
+            if(!*path) path=".";
+            if(u_ls(path)<0) u_write("ls: directory not found\n");
+        } else if(len>=2 && line[0]=='c'&&line[1]=='d'&&(len==2||line[2]==' ')){
+            const char* path=line+2; while(*path==' ') path++;
+            if(!*path) path="/";
+            if(u_cd(path)<0) u_write("cd: directory not found\n");
+        } else if(len==3 && line[0]=='p'&&line[1]=='w'&&line[2]=='d'){
+            if(u_pwd()<0) u_write("pwd: filesystem not mounted\n");
+        } else if(len>=5 && line[0]=='m'&&line[1]=='k'&&line[2]=='d'&&line[3]=='i'&&line[4]=='r'&&(len==5||line[5]==' ')){
+            const char* path=line+5; while(*path==' ') path++;
+            if(!*path || u_mkdir(path)<0) u_write("mkdir: unable to create directory\n");
+        } else if(len>=5 && line[0]=='p'&&line[1]=='r'&&line[2]=='o'&&line[3]=='b'&&line[4]=='e'){
             show_isr_stack_probe();
         } else if(len>=6 && line[0]=='s'&&line[1]=='t'&&line[2]=='a'&&line[3]=='c'&&line[4]=='k'&&line[5]=='s'){
             show_stack_bounds();
@@ -737,6 +774,10 @@ static void user_shell(void){
             show_ret_frame();
         } else if(len>=4 && line[0]=='h'&&line[1]=='e'&&line[2]=='l'&&line[3]=='p'){
             u_write("Commands:\n"
+                    "  ls [DIR] - list a directory\n"
+                    "  cd DIR   - change directory\n"
+                    "  pwd      - print working directory\n"
+                    "  mkdir DIR - create a directory\n"
                     "  help   - show help\n"
                     "  echo X - print X\n"
                     "  probe  - print ISR CPL/SS/ESP/TR\n"
@@ -909,6 +950,10 @@ __attribute__((noreturn)) void kernel_main(void){
     keyboard_enable();
     Test_Kmalloc();
     Test_Blk_Driver();
+    if (fat32_init() == 0)
+        vga_write("FAT32 filesystem mounted\n", 0x0A);
+    else
+        vga_write("FAT32 filesystem not found\n", 0x0C);
     vga_write("TR=",0x0A); print_hex16(tr_probe,0x0A);
     vga_write(" TSS.ss0=",0x0A); print_hex16(tss.ss0,0x0A);
     vga_write(" TSS.esp0=",0x0A); print_hex32(tss.esp0,0x0A); vga_write("\n",0x0A);
