@@ -551,6 +551,7 @@ enum {
     SYS_cd = 9,
     SYS_pwd = 10,
     SYS_mkdir = 11,
+    SYS_prompt = 12,
     SYS_ENOSYS = 0xFFFFFFFFU
 };
 
@@ -590,6 +591,9 @@ uint32_t isr_syscall_c(uint32_t num, uint32_t arg){
             return 0;
         case SYS_mkdir:
             return (uint32_t)(fat32_mkdir((const char*)arg) == 0 ? 0 : -1);
+        case SYS_prompt:
+            fat32_prompt(fat32_print_to_vga);
+            return 0;
         default:
             return SYS_ENOSYS;
     }
@@ -696,6 +700,7 @@ static inline int u_ls(const char *path) { return (int)u_syscall(SYS_ls, (uint32
 static inline int u_cd(const char *path) { return (int)u_syscall(SYS_cd, (uint32_t)path); }
 static inline int u_pwd(void) { return (int)u_syscall(SYS_pwd, 0); }
 static inline int u_mkdir(const char *path) { return (int)u_syscall(SYS_mkdir, (uint32_t)path); }
+static inline void u_prompt(void) { (void)u_syscall(SYS_prompt, 0); }
 __attribute__((noreturn)) static inline void u_exit(void) {
     (void)u_syscall(SYS_exit, 0);
     for (;;) { __asm__ __volatile__("hlt"); }
@@ -738,7 +743,7 @@ static void user_shell(void){
     u_write("Type 'help', 'ls', 'cd DIR', or 'echo X'.\n\n");
     char line[2048]; int len=0;
     for(;;){
-        u_write("COSH> "); len=0;
+        u_prompt(); len=0;
         for(;;){
             int ch=u_readch();
             if(ch<0){ u_yield(); continue; }

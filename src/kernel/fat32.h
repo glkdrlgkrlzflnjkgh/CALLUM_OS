@@ -11,5 +11,6 @@ int fat32_ls(const char *path, fat32_print_fn print);
 int fat32_chdir(const char *path);
 int fat32_mkdir(const char *path);
 void fat32_pwd(fat32_print_fn print);
+void fat32_prompt(fat32_print_fn print);
 
 #endif

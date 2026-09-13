@@ -380,6 +380,32 @@ static int update_path(const char *path) {
     return component_result < 0 ? -1 : 0;
 }
 
+static int path_escapes_root(const char *path) {
+    char component[FAT32_MAX_COMPONENT];
+    uint32_t depth = 0U;
+    const char *current = path;
+    uint32_t index;
+    int component_result;
+
+    if (path[0] != '/') {
+        if (cwd_path[0] != '/') return 1;
+        if (cwd_path[1] != '\0') ++depth;
+        for (index = 1; cwd_path[index]; ++index)
+            if (cwd_path[index] == '/') ++depth;
+    }
+
+    while ((component_result = next_component(&current, component)) > 0) {
+        if (same_name(component, ".")) continue;
+        if (same_name(component, "..")) {
+            if (depth == 0U) return 1;
+            --depth;
+        } else {
+            ++depth;
+        }
+    }
+    return component_result < 0 ? 1 : 0;
+}
+
 static int ls_visitor(const struct fat32_dirent *entry, void *context) {
     fat32_print_fn print = (fat32_print_fn)context;
     char line[16];
@@ -448,7 +474,7 @@ int fat32_chdir(const char *path) {
     struct fat32_dirent directory;
     char old_path[FAT32_MAX_PATH];
 
-    if (!fs.mounted || resolve_path(path, &directory) < 0 ||
+    if (!fs.mounted || path_escapes_root(path) || resolve_path(path, &directory) < 0 ||
         !(directory.attributes & FAT32_ATTR_DIRECTORY)) return -1;
 
     memcpy(old_path, cwd_path, sizeof(old_path));
@@ -511,4 +537,12 @@ int fat32_mkdir(const char *path) {
 
 void fat32_pwd(fat32_print_fn print) {
     if (print && fs.mounted) print(cwd_path);
+}
+
+void fat32_prompt(fat32_print_fn print) {
+    if (!print) return;
+    print("COSH:");
+    if (fs.mounted) print(cwd_path);
+    else print("?");
+    print("> ");
 }
