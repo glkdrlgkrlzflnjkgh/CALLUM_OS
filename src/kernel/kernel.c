@@ -451,7 +451,6 @@ static inline void load_kernel_segments(void){
     __asm__ __volatile__(".intel_syntax noprefix\n\tmov ax,0x10\n\tmov ds,ax\n\tmov es,ax\n\tmov fs,ax\n\tmov gs,ax\n\tmov ss,ax\n\t.att_syntax prefix\n\t"::: "ax");
 }
 static void idt_set_gate(uint8_t num,uint32_t base,uint16_t sel,uint8_t flags){
-    vga_write("[idt_set_gate] Setting IDT gate ",0x0C); print_hex8(num,0x0C); vga_write("\n",0x0C);
     idt[num].base_lo=base&0xFFFF; idt[num].sel=sel; idt[num].always0=0; idt[num].flags=flags; idt[num].base_hi=(base>>16)&0xFFFF;
 }
 
@@ -552,6 +551,11 @@ enum {
     SYS_pwd = 10,
     SYS_mkdir = 11,
     SYS_prompt = 12,
+    SYS_tree = 13,
+    SYS_tree_include_system = 14,
+    SYS_rm = 15,
+    SYS_rm_recursive = 16,
+    SYS_clear = 17,
     SYS_ENOSYS = 0xFFFFFFFFU
 };
 
@@ -593,6 +597,17 @@ uint32_t isr_syscall_c(uint32_t num, uint32_t arg){
             return (uint32_t)(fat32_mkdir((const char*)arg) == 0 ? 0 : -1);
         case SYS_prompt:
             fat32_prompt(fat32_print_to_vga);
+            return 0;
+        case SYS_tree:
+            return (uint32_t)(fat32_tree((const char*)arg, fat32_print_to_vga, 0) == 0 ? 0 : -1);
+        case SYS_tree_include_system:
+            return (uint32_t)(fat32_tree((const char*)arg, fat32_print_to_vga, 1) == 0 ? 0 : -1);
+        case SYS_rm:
+            return (uint32_t)fat32_rm((const char*)arg, 0);
+        case SYS_rm_recursive:
+            return (uint32_t)fat32_rm((const char*)arg, 1);
+        case SYS_clear:
+            vga_clear(0x07);
             return 0;
         default:
             return SYS_ENOSYS;
@@ -700,6 +715,14 @@ static inline int u_ls(const char *path) { return (int)u_syscall(SYS_ls, (uint32
 static inline int u_cd(const char *path) { return (int)u_syscall(SYS_cd, (uint32_t)path); }
 static inline int u_pwd(void) { return (int)u_syscall(SYS_pwd, 0); }
 static inline int u_mkdir(const char *path) { return (int)u_syscall(SYS_mkdir, (uint32_t)path); }
+static inline int u_tree(const char *path, int include_system_dirs) {
+    return (int)u_syscall(include_system_dirs ? SYS_tree_include_system : SYS_tree,
+                          (uint32_t)path);
+}
+static inline int u_rm(const char *path, int recursive) {
+    return (int)u_syscall(recursive ? SYS_rm_recursive : SYS_rm, (uint32_t)path);
+}
+static inline void u_clear(void) { (void)u_syscall(SYS_clear, 0); }
 static inline void u_prompt(void) { (void)u_syscall(SYS_prompt, 0); }
 __attribute__((noreturn)) static inline void u_exit(void) {
     (void)u_syscall(SYS_exit, 0);
@@ -740,7 +763,7 @@ static void user_shell(void){
     //speaker_on(440); delay_ms(100); speaker_off();
     cosh_banner();
     // DID YOU KNOW? on this line, a message used to get printed, I did that to debug the hang when the shell launched!
-    u_write("Type 'help', 'ls', 'cd DIR', or 'echo X'.\n\n");
+    u_write("Welcome to COSH!\n");
     char line[2048]; int len=0;
     for(;;){
         u_prompt(); len=0;
@@ -758,19 +781,84 @@ static void user_shell(void){
             }
         }
         if(len==0) continue;
-        if(len>=2 && line[0]=='l'&&line[1]=='s'&&(len==2||line[2]==' ')){
+        if((len==3 && line[0]=='c'&&line[1]=='l'&&line[2]=='s') ||
+           (len==5 && line[0]=='c'&&line[1]=='l'&&line[2]=='e'&&line[3]=='a'&&line[4]=='r')){
+            u_clear();
+        } else if(len>=2 && line[0]=='l'&&line[1]=='s'&&(len==2||line[2]==' ')){
             const char* path=line+2; while(*path==' ') path++;
             if(!*path) path=".";
             if(u_ls(path)<0) u_write("ls: directory not found\n");
+        } else if(len>=4 && line[0]=='t'&&line[1]=='r'&&line[2]=='e'&&line[3]=='e'&&(len==4||line[4]==' ')){
+            const char* path=line+4;
+            int include_system_dirs = 0;
+            while(*path==' ') path++;
+            if (strncmp(path, "--include-system-dirs", 21) == 0 &&
+                (path[21] == '\0' || path[21] == ' ')) {
+                include_system_dirs = 1;
+                path += 21;
+                while(*path==' ') path++;
+            }
+            if(!*path) path=".";
+            if(u_tree(path, include_system_dirs)<0) u_write("tree: directory not found\n");
         } else if(len>=2 && line[0]=='c'&&line[1]=='d'&&(len==2||line[2]==' ')){
             const char* path=line+2; while(*path==' ') path++;
             if(!*path) path="/";
-            if(u_cd(path)<0) u_write("cd: directory not found\n");
+            {
+                int result = u_cd(path);
+                if(result == -5)
+                    u_write("cd: refusing to go below /\n");
+                else if(result < 0)
+                    u_write("cd: directory not found\n");
+            }
         } else if(len==3 && line[0]=='p'&&line[1]=='w'&&line[2]=='d'){
             if(u_pwd()<0) u_write("pwd: filesystem not mounted\n");
         } else if(len>=5 && line[0]=='m'&&line[1]=='k'&&line[2]=='d'&&line[3]=='i'&&line[4]=='r'&&(len==5||line[5]==' ')){
             const char* path=line+5; while(*path==' ') path++;
             if(!*path || u_mkdir(path)<0) u_write("mkdir: unable to create directory\n");
+        } else if(len>=2 && line[0]=='r'&&line[1]=='m'&&(len==2||line[2]==' ')){
+            char* path=line+2;
+            char* trailing_option;
+            int recursive = 0;
+            int result;
+            while(*path==' ') path++;
+            if (*path == '-' && path[1] == 'r') {
+                recursive = 1;
+                path += 2;
+                if (*path == 'f') path++;
+                while(*path==' ') path++;
+            }
+
+            trailing_option = path;
+            while (*trailing_option) {
+                if (*trailing_option == ' ') {
+                    char *option = trailing_option + 1;
+                    while (*option == ' ') option++;
+                    if (strncmp(option, "-r", 3) == 0 ||
+                        strncmp(option, "-rf", 4) == 0) {
+                        recursive = 1;
+                        *trailing_option = '\0';
+                        while (trailing_option > path &&
+                               trailing_option[-1] == ' ')
+                            *--trailing_option = '\0';
+                        break;
+                    }
+                }
+                trailing_option++;
+            }
+
+            if (!*path) {
+                u_write("rm: missing operand\n");
+            } else {
+                result = u_rm(path, recursive);
+                if (result == -2)
+                    u_write("rm: directory requires -r\n");
+                else if (result == -3)
+                    u_write("rm: protected path\n");
+                else if (result == -4)
+                    u_write("rm: file or directory not found\n");
+                else if (result < 0)
+                    u_write("rm: operation failed\n");
+            }
         } else if(len>=5 && line[0]=='p'&&line[1]=='r'&&line[2]=='o'&&line[3]=='b'&&line[4]=='e'){
             show_isr_stack_probe();
         } else if(len>=6 && line[0]=='s'&&line[1]=='t'&&line[2]=='a'&&line[3]=='c'&&line[4]=='k'&&line[5]=='s'){
@@ -780,9 +868,13 @@ static void user_shell(void){
         } else if(len>=4 && line[0]=='h'&&line[1]=='e'&&line[2]=='l'&&line[3]=='p'){
             u_write("Commands:\n"
                     "  ls [DIR] - list a directory\n"
+                    "  tree [DIR] - show a directory tree\n"
+                    "  tree --include-system-dirs [DIR] - include system directories\n"
                     "  cd DIR   - change directory\n"
                     "  pwd      - print working directory\n"
                     "  mkdir DIR - create a directory\n"
+                    "  rm [-r] PATH - remove a file or directory\n"
+                    "  cls, clear - clear the screen\n"
                     "  help   - show help\n"
                     "  echo X - print X\n"
                     "  probe  - print ISR CPL/SS/ESP/TR\n"
@@ -808,7 +900,7 @@ static void user_shell(void){
 /* ---------- Enter userland ---------- */
 __attribute__((noreturn))
 static void enter_userland(void (*entry)(void)){
-    vga_write("entering userland\n",0x0F);
+    vga_write("entering userland...\n",0x0F);
     uint32_t uesp = (uint32_t)user_stack + sizeof(user_stack) - 4;
     __asm__ __volatile__(
         ".intel_syntax noprefix\n\t"
@@ -955,16 +1047,16 @@ __attribute__((noreturn)) void kernel_main(void){
     keyboard_enable();
     Test_Kmalloc();
     Test_Blk_Driver();
+    vga_write("Initializing FAT32 filesystem\n",0x0c);
     if (fat32_init() == 0)
-        vga_write("FAT32 filesystem mounted\n", 0x0A);
+        vga_write("FAT32 filesystem mounted and initialized!\n", 0x0A);
     else
-        vga_write("FAT32 filesystem not found\n", 0x0C);
+        panic("FAILED to mount the rootfs! (FAT32 init failed)");
     vga_write("TR=",0x0A); print_hex16(tr_probe,0x0A);
     vga_write(" TSS.ss0=",0x0A); print_hex16(tss.ss0,0x0A);
     vga_write(" TSS.esp0=",0x0A); print_hex32(tss.esp0,0x0A); vga_write("\n",0x0A);
     vga_write("Launching COSH...\n\n",0x0F);
     show_stack_bounds();
-    vga_write("Entering userland shortly.... \n", 0x0F);;
     /* Do NOT sti here! user EFLAGS turns IF on at CPL=3 */
     enter_userland(user_entry); // You're in user space, wether you like it or not!
     panic("OH GOD. WE'VE SHITFUCKED, KERNEL MAIN RETURNED!!!"); // This should NEVER HAPPEN! If it does, we've fucked up, big time. (the CPU will execute garbage instructions if this happens, and reboot.)

@@ -10,6 +10,7 @@
 #define FAT32_ATTR_DIRECTORY 0x10U
 #define FAT32_ATTR_LFN 0x0FU
 #define FAT32_EOC 0x0FFFFFF8U
+#define FAT32_TREE_MAX_DEPTH 255U
 
 struct fat32_fs {
     uint32_t partition_lba;
@@ -170,6 +171,12 @@ static int same_name(const char *left, const char *right) {
     return *left == '\0' && *right == '\0';
 }
 
+static int is_system_directory(const char *name) {
+    return same_name(name, "boot") || same_name(name, "dev") ||
+           same_name(name, "proc") || same_name(name, "sys") ||
+           same_name(name, "system") || same_name(name, "kernel");
+}
+
 static int scan_directory(uint32_t directory, int (*visitor)(const struct fat32_dirent *, void *), void *context) {
     uint32_t cluster = directory;
 
@@ -210,6 +217,116 @@ static int find_entry(uint32_t directory, const char *name, struct fat32_dirent 
     return scan_directory(directory, find_visitor, &context) == 1 ? 0 : -1;
 }
 
+struct entry_location {
+    struct fat32_dirent entry;
+    uint32_t lba;
+    uint32_t offset;
+};
+
+static int find_entry_location(uint32_t directory, const char *name,
+                               struct entry_location *result) {
+    uint32_t cluster = directory;
+
+    while (valid_cluster(cluster)) {
+        uint32_t sector_index;
+        for (sector_index = 0; sector_index < fs.sectors_per_cluster; ++sector_index) {
+            uint32_t offset;
+            uint32_t lba = cluster_lba(cluster) + sector_index;
+            if (read_sector(lba) < 0) return -1;
+            for (offset = 0; offset < FAT32_SECTOR_SIZE; offset += FAT32_ENTRY_SIZE) {
+                if (sector[offset] == 0x00) return -1;
+                if (sector[offset] != 0xE5) {
+                    struct fat32_dirent entry;
+                    if (entry_from_bytes(&sector[offset], &entry) &&
+                        same_name(entry.name, name)) {
+                        result->entry = entry;
+                        result->lba = lba;
+                        result->offset = offset;
+                        return 0;
+                    }
+                }
+            }
+        }
+        if (fat_next(cluster, &cluster) < 0) return -1;
+        if (cluster >= FAT32_EOC) return -1;
+    }
+    return -1;
+}
+
+static int delete_entry_at(uint32_t lba, uint32_t offset) {
+    if (read_sector(lba) < 0) return -1;
+    sector[offset] = 0xE5;
+    return write_sector(lba, sector);
+}
+
+static int free_cluster_chain(uint32_t cluster) {
+    while (valid_cluster(cluster)) {
+        uint32_t next;
+        if (fat_next(cluster, &next) < 0 || fat_set(cluster, 0) < 0)
+            return -1;
+        if (next >= FAT32_EOC || next == 0) return 0;
+        cluster = next;
+    }
+    return 0;
+}
+
+static int remove_directory_contents(uint32_t directory) {
+    uint32_t cluster = directory;
+
+    while (valid_cluster(cluster)) {
+        uint32_t sector_index;
+        for (sector_index = 0; sector_index < fs.sectors_per_cluster; ++sector_index) {
+            uint32_t offset;
+            uint32_t lba = cluster_lba(cluster) + sector_index;
+            if (read_sector(lba) < 0) return -1;
+            for (offset = 0; offset < FAT32_SECTOR_SIZE; offset += FAT32_ENTRY_SIZE) {
+                struct fat32_dirent entry;
+                if (sector[offset] == 0x00) return 0;
+                if (sector[offset] == 0xE5 || !entry_from_bytes(&sector[offset], &entry) ||
+                    same_name(entry.name, ".") || same_name(entry.name, ".."))
+                    continue;
+
+                if ((entry.attributes & FAT32_ATTR_DIRECTORY) &&
+                    remove_directory_contents(entry.cluster) < 0)
+                    return -1;
+                if (free_cluster_chain(entry.cluster) < 0 ||
+                    delete_entry_at(lba, offset) < 0)
+                    return -1;
+                if (read_sector(lba) < 0) return -1;
+            }
+        }
+        if (fat_next(cluster, &cluster) < 0) return -1;
+        if (cluster >= FAT32_EOC) return 0;
+    }
+    return 0;
+}
+
+static int contains_protected_file(uint32_t directory) {
+    uint32_t cluster = directory;
+
+    while (valid_cluster(cluster)) {
+        uint32_t sector_index;
+        for (sector_index = 0; sector_index < fs.sectors_per_cluster; ++sector_index) {
+            uint32_t offset;
+            if (read_sector(cluster_lba(cluster) + sector_index) < 0) return -1;
+            for (offset = 0; offset < FAT32_SECTOR_SIZE; offset += FAT32_ENTRY_SIZE) {
+                struct fat32_dirent entry;
+                if (sector[offset] == 0x00) return 0;
+                if (sector[offset] == 0xE5 || !entry_from_bytes(&sector[offset], &entry) ||
+                    same_name(entry.name, ".") || same_name(entry.name, ".."))
+                    continue;
+                if (same_name(entry.name, "kernel.elf")) return 1;
+                if ((entry.attributes & FAT32_ATTR_DIRECTORY) &&
+                    contains_protected_file(entry.cluster) != 0)
+                    return 1;
+            }
+        }
+        if (fat_next(cluster, &cluster) < 0) return -1;
+        if (cluster >= FAT32_EOC) return 0;
+    }
+    return 0;
+}
+
 static int next_component(const char **path, char *component) {
     uint32_t length = 0;
     const char *cursor = *path;
@@ -234,22 +351,28 @@ static int resolve_path(const char *path, struct fat32_dirent *result) {
     char component[FAT32_MAX_COMPONENT];
     int component_result;
 
+    result->cluster = directory;
+    result->attributes = FAT32_ATTR_DIRECTORY;
+    result->name[0] = '\0';
+
     while ((component_result = next_component(&path, component)) > 0) {
         if (same_name(component, ".")) continue;
         if (same_name(component, "..")) {
-            if (directory != fs.root_cluster && find_entry(directory, "..", result) == 0)
+            if (directory != fs.root_cluster && find_entry(directory, "..", result) == 0) {
                 directory = result->cluster;
+                /* FAT32 uses cluster 0 in a root child's '..' entry. */
+                if (directory == 0) directory = fs.root_cluster;
+            }
             continue;
         }
         if (find_entry(directory, component, result) < 0) return -1;
         directory = result->cluster;
         while (*path == '/') ++path;
+        if (*path != '\0' && !(result->attributes & FAT32_ATTR_DIRECTORY))
+            return -1;
     }
 
     if (component_result < 0) return -1;
-    result->cluster = directory;
-    result->attributes = FAT32_ATTR_DIRECTORY;
-    result->name[0] = '\0';
     return 0;
 }
 
@@ -408,15 +531,76 @@ static int path_escapes_root(const char *path) {
 
 static int ls_visitor(const struct fat32_dirent *entry, void *context) {
     fat32_print_fn print = (fat32_print_fn)context;
-    char line[16];
+    char line[24];
     uint32_t length = (uint32_t)strlen(entry->name);
+    const char *kind = (entry->attributes & FAT32_ATTR_DIRECTORY) ? "[DIR] " : "[FILE] ";
+    uint32_t kind_length = (uint32_t)strlen(kind);
 
-    if (length > sizeof(line) - 2U) length = sizeof(line) - 2U;
-    memcpy(line, entry->name, length);
+    if (same_name(entry->name, ".") || same_name(entry->name, ".."))
+        return 0;
+
+    memcpy(line, kind, kind_length);
+    length = kind_length;
+    if (length + strlen(entry->name) + 2U > sizeof(line))
+        return 0;
+    memcpy(&line[length], entry->name, strlen(entry->name));
+    length += (uint32_t)strlen(entry->name);
     if (entry->attributes & FAT32_ATTR_DIRECTORY) line[length++] = '/';
     line[length++] = '\n';
     line[length] = '\0';
     print(line);
+    return 0;
+}
+
+static void tree_indent(char *line, uint32_t depth, uint32_t *length) {
+    uint32_t index;
+    for (index = 0; index < depth && *length + 2U < 64U; ++index) {
+        line[(*length)++] = ' ';
+        line[(*length)++] = ' ';
+    }
+}
+
+struct tree_context {
+    fat32_print_fn print;
+    uint32_t depth;
+    int include_system_dirs;
+};
+
+static int tree_visitor(const struct fat32_dirent *entry, void *context) {
+    struct tree_context *tree = (struct tree_context *)context;
+    char line[64];
+    uint32_t length = 0;
+    uint32_t name_length;
+
+    if (same_name(entry->name, ".") || same_name(entry->name, ".."))
+        return 0;
+    if (!tree->include_system_dirs &&
+        (entry->attributes & FAT32_ATTR_DIRECTORY) &&
+        is_system_directory(entry->name))
+        return 0;
+
+    tree_indent(line, tree->depth, &length);
+    line[length++] = '-';
+    line[length++] = ' ';
+    name_length = (uint32_t)strlen(entry->name);
+    if (name_length > sizeof(line) - length - 2U)
+        name_length = sizeof(line) - length - 2U;
+    memcpy(&line[length], entry->name, name_length);
+    length += name_length;
+    if (entry->attributes & FAT32_ATTR_DIRECTORY) line[length++] = '/';
+    line[length++] = '\n';
+    line[length] = '\0';
+    tree->print(line);
+
+    if ((entry->attributes & FAT32_ATTR_DIRECTORY) &&
+        tree->depth < FAT32_TREE_MAX_DEPTH && valid_cluster(entry->cluster)) {
+        struct tree_context child = {
+            tree->print,
+            tree->depth + 1U,
+            tree->include_system_dirs
+        };
+        scan_directory(entry->cluster, tree_visitor, &child);
+    }
     return 0;
 }
 
@@ -470,12 +654,42 @@ int fat32_ls(const char *path, fat32_print_fn print) {
     return scan_directory(directory.cluster, ls_visitor, print) < 0 ? -1 : 0;
 }
 
+int fat32_tree(const char *path, fat32_print_fn print, int include_system_dirs) {
+    struct fat32_dirent directory;
+    struct tree_context tree;
+
+    if (!fs.mounted || !print || resolve_path(path, &directory) < 0 ||
+        !(directory.attributes & FAT32_ATTR_DIRECTORY)) return -1;
+    print(path);
+    print("\n");
+    tree.print = print;
+    tree.depth = 0;
+    tree.include_system_dirs = include_system_dirs;
+    return scan_directory(directory.cluster, tree_visitor, &tree) < 0 ? -1 : 0;
+}
+
 int fat32_chdir(const char *path) {
     struct fat32_dirent directory;
     char old_path[FAT32_MAX_PATH];
+    char parent_path[FAT32_MAX_PATH];
 
-    if (!fs.mounted || path_escapes_root(path) || resolve_path(path, &directory) < 0 ||
-        !(directory.attributes & FAT32_ATTR_DIRECTORY)) return -1;
+    if (!fs.mounted) return -1;
+    if (path_escapes_root(path)) return -5;
+
+    if (same_name(path, "..")) {
+        uint32_t length;
+        memcpy(parent_path, cwd_path, sizeof(parent_path));
+        length = (uint32_t)strlen(parent_path);
+        while (length > 1U && parent_path[length - 1U] != '/') --length;
+        parent_path[length > 1U ? length - 1U : 1U] = '\0';
+        if (resolve_path(parent_path, &directory) < 0)
+            return -1;
+    } else if (resolve_path(path, &directory) < 0 ||
+               !(directory.attributes & FAT32_ATTR_DIRECTORY)) {
+        return -1;
+    }
+
+    if (!(directory.attributes & FAT32_ATTR_DIRECTORY)) return -1;
 
     memcpy(old_path, cwd_path, sizeof(old_path));
     if (update_path(path) < 0) {
@@ -535,14 +749,47 @@ int fat32_mkdir(const char *path) {
     return write_sector(cluster_lba(cluster), sector);
 }
 
+int fat32_rm(const char *path, int recursive) {
+    char parent_path[FAT32_MAX_PATH];
+    char name[FAT32_MAX_COMPONENT];
+    struct fat32_dirent parent;
+    struct entry_location target;
+
+    if (!fs.mounted || !path || split_parent_path(path, parent_path, name) < 0)
+        return -1;
+    if (same_name(name, ".") || same_name(name, "..") ||
+        same_name(name, "kernel.elf"))
+        return -3;
+    if (resolve_path(parent_path, &parent) < 0 ||
+        !(parent.attributes & FAT32_ATTR_DIRECTORY) ||
+        find_entry_location(parent.cluster, name, &target) < 0)
+        return -4;
+
+    if ((target.entry.attributes & FAT32_ATTR_DIRECTORY) && !recursive)
+        return -2;
+    if ((target.entry.attributes & FAT32_ATTR_DIRECTORY) &&
+        target.entry.cluster == cwd_cluster)
+        return -1;
+    if ((target.entry.attributes & FAT32_ATTR_DIRECTORY) && recursive &&
+        contains_protected_file(target.entry.cluster) != 0)
+        return -1;
+    if ((target.entry.attributes & FAT32_ATTR_DIRECTORY) &&
+        remove_directory_contents(target.entry.cluster) < 0)
+        return -1;
+    if (free_cluster_chain(target.entry.cluster) < 0 ||
+        delete_entry_at(target.lba, target.offset) < 0)
+        return -1;
+    return 0;
+}
+
 void fat32_pwd(fat32_print_fn print) {
     if (print && fs.mounted) print(cwd_path);
 }
 
 void fat32_prompt(fat32_print_fn print) {
     if (!print) return;
-    print("COSH:");
+    print("");
     if (fs.mounted) print(cwd_path);
-    else print("?");
-    print("> ");
+    else print("unmounted???"); // uh oh.
+    print("$ ");
 }

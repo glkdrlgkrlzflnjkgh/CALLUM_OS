@@ -15,7 +15,7 @@ GRUB_DIR="$ISO_DIR/boot/grub"
 KERNEL_ELF="$BUILD_DIR/kernel.elf"
 ISO_NAME="CallumOS.iso"
 DISK_IMG="disk.img"
-DISK_SIZE_MB="${DISK_SIZE_MB:-64}"   # size of disk image
+DISK_SIZE_MB="${DISK_SIZE_MB:-4096}"   # size of disk image
 MNT_DIR="${MNT_DIR:-/mnt/callumos}"  # temp mountpoint for FAT32
 
 # Tools (override via env if needed)

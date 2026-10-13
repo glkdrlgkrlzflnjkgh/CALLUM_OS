@@ -120,6 +120,8 @@ Useful COSH commands include:
 
 ```text
 ls [DIR] List a directory
+tree [DIR] Show a directory tree
+rm [-r] PATH Remove a file or directory
 cd DIR   Change directory
 pwd      Print the working directory
 help     List commands
@@ -132,9 +134,11 @@ crash    Trigger the kernel panic path
 ```
 
 The current FAT32 implementation supports short 8.3 names, directory
-traversal, and basic `mkdir` support. Long filenames, general file reads and
-writes, deletion, and directory growth are planned for the next filesystem
-step.
+traversal, basic `mkdir` support, bounded recursive `tree` output, and file or
+directory removal. `ls` and `tree` hide the synthetic `.` and `..` entries.
+Recursive deletion of `/` is always rejected, and core files such as
+`kernel.elf` cannot be removed. Long filenames, general file reads and
+writes, and directory growth are planned for the next filesystem step.
 
 ## Development Notes
 
