@@ -656,6 +656,7 @@ void exc_gp_c(uint32_t err, uint32_t eip, uint16_t cs, uint32_t eflags){
 
     panic("General protection fault");
 }
+// This SHOULD be impossible - PAE=0 in our OS. And if it happens, it means we've done something impossible.
 void exc_pf_c(uint32_t err, uint32_t eip, uint16_t cs, uint32_t eflags){
     uint32_t cr2; __asm__ __volatile__(".intel_syntax noprefix\n\tmov %0, cr2\n\t.att_syntax prefix\n\t":"=r"(cr2));
     vga_write("\n[Page fault 0x0E]\n",0x0C);
