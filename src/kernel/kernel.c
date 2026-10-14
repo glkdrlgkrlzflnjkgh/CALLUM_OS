@@ -16,6 +16,7 @@
 #include <stdint.h> // avoid compiler errors, sorry for that include!
 #include "constants/vga_consts.h"
 #include "constants/mem_consts.h"
+#include "constants/panic_consts.h"
 /* ---------- Multiboot header ---------- */
 void panic(const char* msg);
 #define MULTIBOOT_HEADER_MAGIC    0x1BADB002U
@@ -345,7 +346,7 @@ __attribute__((noreturn)) void panic(const char* msg) {
             VGA[r*VGA_COLS+c]=vga_cell(' ',BSOD_ATTR);
 
     /* Banner */
-    const char* banner="KERNEL PANIC";
+    const char* banner="Aieee! Kernel panic!";
     int banner_col=(VGA_COLS-str_len(banner))/2;
     vga_puts_at(4,banner_col,banner,BSOD_ATTR);
 
@@ -575,7 +576,7 @@ uint32_t isr_syscall_c(uint32_t num, uint32_t arg){
             vga_write("\n[process exited]\n",0x07);
             for(;;){ __asm__ __volatile__("hlt"); }
         case SYS_yield:
-            /* cooperative placeholder */
+            /* cooperative placeholder (NB! DO NOT USE! THIS WILL NEVER DO ANYTHING!- SCHEDULER WILL BE PREEMTIVE AND NON-COOPERATIVE WHEN PROGRAM LOADER IS IMPLIMENTED AND SO IS THE STDLIB!!!!!) */
             return 0;
         case SYS_alloc:
             return (uint32_t)kmalloc((size_t)arg);

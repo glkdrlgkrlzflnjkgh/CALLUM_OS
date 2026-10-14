@@ -1,3 +1,4 @@
+/* Technically, the clis and hlts for panic in this file are uneeded as panic in kernel.c already cli and hlt. so erm.... this might be a FIXME? */
 .intel_syntax noprefix
 
 /* ========== Exports ========== */
