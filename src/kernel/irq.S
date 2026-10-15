@@ -261,10 +261,25 @@ isr_exc_0x0E:
     cli
     hlt
 
+isr_exc_0x12:
+    push ebp
+    mov  ebp, esp
+
+    mov  eax, DWORD PTR [ebp+4]    /* EIP */
+    mov  ecx, DWORD PTR [ebp+8]    /* CS  */
+    mov  edx, DWORD PTR [ebp+12]   /* EFLAGS */
+
+    push edx
+    push ecx
+    push eax
+    call exc_mc_c                  /* your dedicated C handler */
+
+    cli
+    hlt
+
 /* Remaining exceptions wired by kernel.c */
 EXC_NOERR(0x10)
 EXC_ERR(0x11)
-EXC_NOERR(0x12)
 EXC_NOERR(0x13)
 EXC_NOERR(0x1D)
 EXC_NOERR(0x1E)

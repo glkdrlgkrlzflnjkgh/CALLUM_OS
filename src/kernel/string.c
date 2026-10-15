@@ -38,3 +38,27 @@ size_t strlen(const char *s) {
     while (*s++) len++;
     return len;
 }
+
+char *strlcat(char *dst, const char *src, size_t bufsize) {
+    size_t dlen = 0;
+
+    // Find end of dst, but don’t run past bufsize
+    while (dlen < bufsize && dst[dlen]) {
+        dlen++;
+    }
+
+    // No space left
+    if (dlen == bufsize) {
+        return dst;
+    }
+
+    size_t i = dlen;
+
+    // Copy until we run out of space
+    while (i < bufsize - 1 && *src) {
+        dst[i++] = *src++;
+    }
+
+    dst[i] = '\0';
+    return dst;
+}

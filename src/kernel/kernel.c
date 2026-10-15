@@ -1,11 +1,4 @@
-/* ---------- TODOS  ---------- */
-// ✓ add Kmalloc
-// ✓ add Kfree
-// Filesystem (1/3 done, did block_device implimentation!)
-// ELF loader (1/2 done, did ELF constants a while back.)
-// A video driver? (0/??? done. As I have no freaking idea how to PCLE driver. and GPU driver...)
-// fact: i embarassed myself by trying to fix a "bug" with userland where it wouldnt priv switch to ring 3, the bug was actually a misreport from the probe command! -Callum, project lead..
-// <CONTD> and head maintainer!
+
 
 
 /* src/kernel/kernel.c — CallumOS full kernel (i386, Multiboot, VGA TTY, IRQs, syscalls, userland) */
@@ -127,7 +120,7 @@ void* kmalloc(size_t size) {
 
     // 2. Fall back to bump allocation
     if (heap_ptr + total_size > heap_end) {
-        panic("Ran out of memory in kernel space!!!!"); // Out of memory; this is really bad. As there could be a runaway allocation in kernel space.
+        panic("Ran out of memory in kernel space!!!!"); // Out of memory; this is really bad. As there could be a runaway allocation in kernel space. (or external fragmentation.)
     }
 
     free_block_t* block = (free_block_t*)heap_ptr;
@@ -316,6 +309,19 @@ static void vga_puthex32_at(int row, int col, uint32_t val, uint8_t attr) {
     }
 }
 
+void vga_puthex32(uint32_t val, uint8_t attr) {
+    vga_putc('0', attr);
+    vga_putc('x', attr);
+
+    for (int i = 7; i >= 0; i--) {
+        int d = (val >> (i * 4)) & 0xF;
+        char c = (d < 10) ? ('0' + d) : ('A' + (d - 10));
+        vga_putc(c, attr);
+    }
+}
+
+
+
 void vga_puthex8(uint8_t val, uint8_t attr) {
     const char* hex = "0123456789ABCDEF";
     char buf[3];
@@ -335,54 +341,34 @@ void delay_ms(uint32_t ms){
     while (ticks < target)
         __asm__ __volatile__("hlt");
 }
+void enable_intr() {
+	__asm__ __volatile__("sti");   // enable IRQs
+}
 
+void disable_intr() {
+	__asm__ __volatile__("cli");
+}
 /* panic handler */
 __attribute__((noreturn)) void panic(const char* msg) {
-    __asm__ __volatile__("sti"); // ensure interrupts are still on- we'll need them for the auto-reboot.
-    // ive actually kept IRQs on, so the PIT IRQ can still fire!
-    /* Clear screen */
-    for (int r=0;r<VGA_ROWS;r++)
-        for (int c=0;c<VGA_COLS;c++)
-            VGA[r*VGA_COLS+c]=vga_cell(' ',BSOD_ATTR);
-
-    /* Banner */
-    const char* banner="Aieee! Kernel panic!";
-    int banner_col=(VGA_COLS-str_len(banner))/2;
-    vga_puts_at(4,banner_col,banner,BSOD_ATTR);
-
-    /* Panic message */
-    int msg_col=(VGA_COLS-str_len(msg))/2;
-    vga_puts_at(6,msg_col,msg,BSOD_ATTR);
-
-    /* Halt message */
-    const char* halted="To prevent any further issues, the CPU has halted. Rebooting in 5 seconds...";
-    int halt_col=(VGA_COLS-str_len(halted))/2;
-    vga_puts_at(8,halt_col,halted,BSOD_ATTR);
-
-    /* Stack trace header */
-    const char* hdr="Kernel stack trace:";
-    int hdr_col=(VGA_COLS-str_len(hdr))/2;
-    vga_puts_at(10,hdr_col,hdr,BSOD_ATTR);
-
-    /* Capture ESP */
-    uint32_t* esp;
-    __asm__ __volatile__("mov %%esp,%0":"=r"(esp));
-
-
-    for (int i=0;i<13;i++) {
-        int row=12+i;
-        int col=4;
-        VGA[row*VGA_COLS+col++]=vga_cell('[',BSOD_ATTR);
-        vga_putdec_at(row,col,i,BSOD_ATTR);
-        col+=2; // skip past digits
-        VGA[row*VGA_COLS+col++]=vga_cell(']',BSOD_ATTR);
-        vga_puthex32_at(row,col,esp[i],BSOD_ATTR);
-    }
-   delay_ms(5000);        // uses PIT ticks, requires interrupts On
-   outb(0x64, 0xFE); // send CPU reset command to keyboard controller
-   __asm__ __volatile__("cli; hlt"); // halt CPU if reset fails, and also disable interrupts to prevent further issues
-
+	disable_intr();
+    vga_write("\n*** KERNEL PANIC ***\n", BSOD_ATTR);
+    vga_write(msg, BSOD_ATTR);
+    vga_write("\n", BSOD_ATTR);
+	vga_write("\nat the time of the crash, the CPU was in the following state:\n", BSOD_ATTR_CPUDUMP);
+	uint32_t eflags;
+	__asm__ __volatile__("pushf; pop %0" : "=r"(eflags));
+	vga_write("EFLAGS: ", BSOD_ATTR_CPUDUMP);
+	vga_puthex32(eflags, BSOD_ATTR_CPUDUMP);
+	vga_write("\n", BSOD_ATTR_CPUDUMP);
+	uint32_t cs;
+	__asm__ __volatile__("mov %%cs, %0" : "=r"(cs));
+	vga_write("CS: ", BSOD_ATTR_CPUDUMP);
+	vga_puthex32(cs, BSOD_ATTR_CPUDUMP);
+	vga_write("\n", BSOD_ATTR);
+	vga_write("CPU HALTED - RESTART MANUALLY", BSOD_ATTR);
+    __asm__ __volatile__("hlt");  // halt.
 }
+
 /* ---------- Probes written by irq.S ---------- */
 volatile uint16_t isr_probe_ss = 0;
 volatile uint32_t isr_probe_esp = 0;
@@ -452,7 +438,7 @@ static inline void load_kernel_segments(void){
     __asm__ __volatile__(".intel_syntax noprefix\n\tmov ax,0x10\n\tmov ds,ax\n\tmov es,ax\n\tmov fs,ax\n\tmov gs,ax\n\tmov ss,ax\n\t.att_syntax prefix\n\t"::: "ax");
 }
 static void idt_set_gate(uint8_t num,uint32_t base,uint16_t sel,uint8_t flags){
-    idt[num].base_lo=base&0xFFFF; idt[num].sel=sel; idt[num].always0=0; idt[num].flags=flags; idt[num].base_hi=(base>>16)&0xFFFF;
+	idt[num].base_lo=base&0xFFFF; idt[num].sel=sel; idt[num].always0=0; idt[num].flags=flags; idt[num].base_hi=(base>>16)&0xFFFF;
 }
 
 /* ---------- PIC/PIT ---------- */
@@ -668,6 +654,19 @@ void exc_pf_c(uint32_t err, uint32_t eip, uint16_t cs, uint32_t eflags){
     vga_write(" EFLAGS=",0x0C); print_hex32(eflags,0x0C); vga_write("\n",0x0C);
     panic("Page fault");
 }
+
+void exc_mc_c(uint32_t eip, uint16_t cs, uint32_t eflags)
+{
+    vga_write("\n[MACHINE CHECK EXCEPTION]\n", 0x0C);
+
+    vga_write("EIP=",0x0C); print_hex32(eip,0x0C);
+    vga_write(" CS=",0x0C); print_hex16(cs,0x0C);
+    vga_write(" EFLAGS=",0x0C); print_hex32(eflags,0x0C);
+    vga_write("\n",0x0C);
+
+    panic("Aieee! Machine check exception!");
+}
+
 /* ---------- User-mode helpers (COSH) ---------- */
 /* Keep the syscall number in EAX so the assembly stub can preserve and return it. */
 static inline uint32_t u_syscall(uint32_t number, uint32_t arg) {
@@ -863,8 +862,6 @@ static void user_shell(void){
             }
         } else if(len>=5 && line[0]=='p'&&line[1]=='r'&&line[2]=='o'&&line[3]=='b'&&line[4]=='e'){
             show_isr_stack_probe();
-        } else if(len>=6 && line[0]=='s'&&line[1]=='t'&&line[2]=='a'&&line[3]=='c'&&line[4]=='k'&&line[5]=='s'){
-            show_stack_bounds();
         } else if(len==3 && line[0]=='r'&&line[1]=='e'&&line[2]=='t'){
             show_ret_frame();
         } else if(len>=4 && line[0]=='h'&&line[1]=='e'&&line[2]=='l'&&line[3]=='p'){
@@ -880,7 +877,6 @@ static void user_shell(void){
                     "  help   - show help\n"
                     "  echo X - print X\n"
                     "  probe  - print ISR CPL/SS/ESP/TR\n"
-                    "  stacks - show kernel stack bounds\n"
                     "  ret    - show last IRQ return frame\n"
                     "  exit   - exit\n"
                     "  crash  - trigger kernel panic\n");
@@ -909,7 +905,7 @@ static void enter_userland(void (*entry)(void)){
         "cli\n\t"            /* avoid IRQs while building frame */
         "push 0x23\n\t"      /* user SS */
         "push %0\n\t"        /* user ESP */
-        "push 0x3202\n\t"    /* user EFLAGS: IOPL=3, IF=1, bit1=1 */
+        "push 0x1202\n\t"    /* user EFLAGS: IOPL=0, IF=1, bit1=1 */
         "push 0x1B\n\t"      /* user CS */
         "push %1\n\t"        /* user EIP (entry) */
         "iret\n\t"
@@ -922,10 +918,21 @@ static void enter_userland(void (*entry)(void)){
 }
 
 /* ---------- User entry trampoline ---------- */
+//NB! Do NOT STI HERE: DOING SO WILL CAUSE #GP!!!!!
 __attribute__((naked)) static void user_entry(void){
-    __asm__ __volatile__(".intel_syntax noprefix\n\tmov ax,0x23\n\tmov ds,ax\n\tmov es,ax\n\tmov fs,ax\n\tmov gs,ax\n\tsti\n\tcall user_shell\n\t.att_syntax prefix\n\t"); // BOOOOOIINNNGG!!
+    __asm__ __volatile__(
+        ".intel_syntax noprefix\n\t"
+        "mov ax,0x23\n\t"
+        "mov ds,ax\n\t"
+        "mov es,ax\n\t"
+        "mov fs,ax\n\t"
+        "mov gs,ax\n\t"
+        "call user_shell\n\t"
+        ".att_syntax prefix\n\t"
+    );
     panic("user_entry returned unexpectedly");
 }
+
 void Test_Kmalloc() {
    vga_write("Testing Kmalloc...\n",0x0F);
    void* kmalloc_test = kmalloc(8);
@@ -990,8 +997,8 @@ __attribute__((noreturn)) void kernel_main(void){
     /* Load TR and capture it */
     ltr(TSSS);
     tr_probe = str_read();
-    vga_write("--- CALLUMOS KERNEL STARTING ---\n", 0x0F);
-    vga_write("\nSetting up exceptions\n",0x0c);
+    vga_write("CallumOS booting.\n", 0x0F);
+    vga_write("Setting up exceptions\n", 0x0c);
     /* Exceptions */
     idt_set_gate(0x00,(uint32_t)isr_exc_0x00,KCS,0x8E);
     idt_set_gate(0x01,(uint32_t)isr_exc_0x01,KCS,0x8E);
@@ -1053,7 +1060,7 @@ __attribute__((noreturn)) void kernel_main(void){
     if (fat32_init() == 0)
         vga_write("FAT32 filesystem mounted and initialized!\n", 0x0A);
     else
-        panic("FAILED to mount the rootfs! (FAT32 init failed)");
+        panic("fat32 init failed");
     vga_write("TR=",0x0A); print_hex16(tr_probe,0x0A);
     vga_write(" TSS.ss0=",0x0A); print_hex16(tss.ss0,0x0A);
     vga_write(" TSS.esp0=",0x0A); print_hex32(tss.esp0,0x0A); vga_write("\n",0x0A);
@@ -1061,5 +1068,5 @@ __attribute__((noreturn)) void kernel_main(void){
     show_stack_bounds();
     /* Do NOT sti here! user EFLAGS turns IF on at CPL=3 */
     enter_userland(user_entry); // You're in user space, wether you like it or not!
-    panic("OH GOD. WE'VE SHITFUCKED, KERNEL MAIN RETURNED!!!"); // This should NEVER HAPPEN! If it does, we've fucked up, big time. (the CPU will execute garbage instructions if this happens, and reboot.)
+    panic("kernel_main returned"); // This should NEVER HAPPEN! If it does, we've fucked up, big time. (the CPU will execute garbage instructions if this happens, and reboot.)
 }

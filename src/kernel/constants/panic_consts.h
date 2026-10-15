@@ -1,1 +1,2 @@
-#define BSOD_ATTR 0x5F   // magenta background, bright white text
+#define BSOD_ATTR 0x0F
+#define BSOD_ATTR_CPUDUMP 0x0c
