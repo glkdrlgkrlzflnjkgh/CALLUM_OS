@@ -348,8 +348,13 @@ void enable_intr() {
 void disable_intr() {
 	__asm__ __volatile__("cli");
 }
+
+void permahang() {
+	__asm__ __volatile__("cli; hlt");
+}
 /* panic handler */
 __attribute__((noreturn)) void panic(const char* msg) {
+	vga_clear_panic();
 	disable_intr();
     vga_write("\n*** KERNEL PANIC ***\n", BSOD_ATTR);
     vga_write(msg, BSOD_ATTR);
@@ -366,7 +371,7 @@ __attribute__((noreturn)) void panic(const char* msg) {
 	vga_puthex32(cs, BSOD_ATTR_CPUDUMP);
 	vga_write("\n", BSOD_ATTR);
 	vga_write("CPU HALTED - RESTART MANUALLY", BSOD_ATTR);
-    __asm__ __volatile__("hlt");  // halt.
+    permahang();
 }
 
 /* ---------- Probes written by irq.S ---------- */
@@ -554,12 +559,12 @@ static void fat32_print_to_vga(const char *text) {
 uint32_t isr_syscall_c(uint32_t num, uint32_t arg){
     switch(num){
         case SYS_write:
-            vga_write((const char*)arg, 0x07);
+            vga_write((const char*)arg, 0x0F);
             return 0;
         case SYS_readch:
             return (uint32_t)kbuf_pop(); /* -1 if none */
         case SYS_exit:
-            vga_write("\n[process exited]\n",0x07);
+            vga_write("\n[process exited]\n",0x0F);
             for(;;){ __asm__ __volatile__("hlt"); }
         case SYS_yield:
             /* cooperative placeholder (NB! DO NOT USE! THIS WILL NEVER DO ANYTHING!- SCHEDULER WILL BE PREEMTIVE AND NON-COOPERATIVE WHEN PROGRAM LOADER IS IMPLIMENTED AND SO IS THE STDLIB!!!!!) */
@@ -759,12 +764,7 @@ static void show_ret_frame(void){
 
 /* ---------- COSH user shell ---------- */
 static void user_shell(void){
-    // there used to be a beep here. Got removed because linda from the unpaid interns department got distressed over it! (JOKE! I removed it because... it caused a general protection fault, which led to a kernel panic. Oops.)
-    // but if you want to break your install and make it permanent via that being compilied in, uncomment the line below (please dont)
-    //speaker_on(440); delay_ms(100); speaker_off();
     cosh_banner();
-    // DID YOU KNOW? on this line, a message used to get printed, I did that to debug the hang when the shell launched!
-    u_write("Welcome to COSH!\n");
     char line[2048]; int len=0;
     for(;;){
         u_prompt(); len=0;
@@ -888,7 +888,7 @@ static void user_shell(void){
             (void)u_syscall(SYS_reboot, 0);
         } else if(len==5 && line[0]=='c'&&line[1]=='r'&&line[2]=='a'&&line[3]=='s'&&line[4]=='h'){
             u_write("Crashing now...\n");
-            u_panic("Crash command invoked from COSH");
+            speaker_off();
         } else {
             u_write("Unknown command.\n");
         }
