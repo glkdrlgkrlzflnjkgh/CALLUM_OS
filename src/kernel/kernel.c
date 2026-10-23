@@ -1,6 +1,3 @@
-
-
-
 /* src/kernel/kernel.c — CallumOS full kernel (i386, Multiboot, VGA TTY, IRQs, syscalls, userland) */
 #include "string.h"
 #include "elf.h" // Include elf.h, it contains all the constants I need for the upcoming ELF loader.
@@ -354,7 +351,6 @@ void permahang() {
 }
 /* panic handler */
 __attribute__((noreturn)) void panic(const char* msg) {
-	vga_clear_panic();
 	disable_intr();
     vga_write("\n*** KERNEL PANIC ***\n", BSOD_ATTR);
     vga_write(msg, BSOD_ATTR);
@@ -662,14 +658,14 @@ void exc_pf_c(uint32_t err, uint32_t eip, uint16_t cs, uint32_t eflags){
 
 void exc_mc_c(uint32_t eip, uint16_t cs, uint32_t eflags)
 {
-    vga_write("\n[MACHINE CHECK EXCEPTION]\n", 0x0C);
+    vga_write("\n[!!!MACHINE CHECK EXCEPTION!!!]\n", 0x0C);
 
     vga_write("EIP=",0x0C); print_hex32(eip,0x0C);
     vga_write(" CS=",0x0C); print_hex16(cs,0x0C);
     vga_write(" EFLAGS=",0x0C); print_hex32(eflags,0x0C);
     vga_write("\n",0x0C);
 
-    panic("Aieee! Machine check exception!");
+    panic("Aieee! Machine check exception! (could be potential hardware failure! Beware!)");
 }
 
 /* ---------- User-mode helpers (COSH) ---------- */
@@ -972,7 +968,7 @@ void Test_Blk_Driver() {
 
 }
 /* ---------- Kernel entry ---------- */
-// OH CRAP- THE KERNEL'S ENTRYPOINT IS... IS *NAKED!!!* AND I JUST SAW ITS PRIVATE PARTS! HELP! HELP! SOMEONE GET ME A... relaxing heartbeat sound? ... ah thats nice and rythmic. Anyway, back on topic: OH GOD ITS NAKED EVERYONE PANIC- {we'll be right back!}
+//(yes. it shouldn't return...)
 __attribute__((noreturn)) void kernel_main(void){
     /* GDT: null, KCS, KDS, UCS, UDS, TSS */
     gdt_set(0,0,0,0,0);
@@ -1067,6 +1063,8 @@ __attribute__((noreturn)) void kernel_main(void){
     vga_write("Launching COSH...\n\n",0x0F);
     show_stack_bounds();
     /* Do NOT sti here! user EFLAGS turns IF on at CPL=3 */
+#ifndef TEST_KRETURN_PANIC
     enter_userland(user_entry); // You're in user space, wether you like it or not!
-    panic("kernel_main returned"); // This should NEVER HAPPEN! If it does, we've fucked up, big time. (the CPU will execute garbage instructions if this happens, and reboot.)
+#endif
+    panic("Aiee! kernel_main returned!"); // This should NEVER HAPPEN! If it does, we've fucked up, big time. (the CPU will execute garbage instructions if this happens, and reboot.)
 }

@@ -32,6 +32,7 @@ RSYNC="${RSYNC:-rsync}"
 
 # Flags (tweak as needed)
 CFLAGS="${CFLAGS:--m32 -O0 -g -Wall -Wextra -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables}"
+CFLAGS_DANGERZONE="-DTEST_KRETURN_PANIC"
 ASFLAGS="${ASFLAGS:--m32 -g}"
 LDFLAGS="${LDFLAGS:--m elf_i386 -nostdlib}"
 
@@ -161,8 +162,12 @@ link_kernel() {
 
 prepare_iso_tree() {
     log "Preparing ISO tree..."
-    mkdir -p "$ISO_DIR/boot"
-    cp "$KERNEL_ELF" "$ISO_DIR/boot/"
+	rm -rf "$ISO_DIR"
+	mkdir -p "$ISO_DIR"
+
+	mkdir -p "$ISO_DIR/cos/krn"
+	cp "$KERNEL_ELF" "$ISO_DIR/cos/krn"
+
 
     local grub_cfg_root="$ISO_DIR/grub.cfg"
     local grub_cfg_boot="$GRUB_DIR/grub.cfg"
@@ -175,12 +180,18 @@ prepare_iso_tree() {
         log "No grub.cfg found in ISO tree; creating minimal grub.cfg at $grub_cfg_boot..."
         mkdir -p "$(dirname "$grub_cfg_boot")"
         cat > "$grub_cfg_boot" <<EOF
-set timeout=0
+set timeout=10
 set default=0
 
 menuentry "CallumOS" {
-    multiboot /boot/$(basename "$KERNEL_ELF")
+    multiboot /cos/krn/$(basename "$KERNEL_ELF")
     boot
+}
+menuentry "shutdown" {
+	halt
+}
+menuentry "reboot" {
+	reboot
 }
 EOF
         ok "Minimal grub.cfg created at $grub_cfg_boot"
@@ -317,6 +328,17 @@ main() {
             create_fat32_disk_image
             ok "Build complete: $DISK_IMG"
             ;;
+		panic)
+			check_env
+			prepare_dirs
+			CFLAGS="$CFLAGS $CFLAGS_DANGERZONE"
+			compile_sources
+			link_kernel
+			prepare_iso_tree
+			build_iso
+			create_fat32_disk_image
+			ok "Build complete with TEST_KRETURN_PANIC enabled: $DISK_IMG"
+			;;
         iso)
             check_env
             prepare_dirs
